@@ -524,6 +524,7 @@ impl SegmentHolder {
     pub fn apply_points<F>(
         &self,
         ids: &[PointIdType],
+        hw_counter: &HardwareCounterCell,
         mut point_operation: F,
     ) -> OperationResult<usize>
     where
@@ -536,21 +537,7 @@ impl SegmentHolder {
         let (to_update, to_delete) = self.find_points_to_update_and_delete(ids);
 
         // Delete old points first, because we want to handle copy-on-write in multiple proxy segments properly
-        for (segment_id, points) in to_delete {
-            let segment = self.get(segment_id).unwrap();
-            let segment_arc = segment.get();
-            let mut write_segment = segment_arc.write();
-
-            for point_id in points {
-                if let Some(version) = write_segment.point_version(point_id) {
-                    write_segment.delete_point(
-                        version,
-                        point_id,
-                        &HardwareCounterCell::disposable(), // Internal operation: no need to measure.
-                    )?;
-                }
-            }
-        }
+        self.delete_points_from_segments(to_delete, hw_counter)?;
 
         // Apply point operations to selected segments
         let mut applied_points = 0;
@@ -566,6 +553,37 @@ impl SegmentHolder {
         }
 
         Ok(applied_points)
+    }
+
+    pub fn delete_points_from_segments(
+        &self,
+        to_delete: AHashMap<SegmentId, Vec<PointIdType>>,
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<()> {
+        for (segment_id, points) in to_delete {
+            let segment = self.get(segment_id).unwrap();
+            let segment_arc = segment.get();
+            let mut write_segment = segment_arc.write();
+
+            for point_id in points {
+                if let Some(version) = write_segment.point_version(point_id) {
+                    write_segment.delete_point(version, point_id, hw_counter)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// This operation deduplicates subset of points across all segments.
+    /// It scans all segments for presence of the points, detects points with the highest version,
+    /// and removes all other versions of the points from all segments.
+    pub fn deduplicate_points(
+        &self,
+        points: &[PointIdType],
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<()> {
+        let (_to_keep, to_delete) = self.find_points_to_update_and_delete(points);
+        self.delete_points_from_segments(to_delete, hw_counter)
     }
 
     /// Try to acquire read lock over the given segment with increasing wait time.
@@ -661,53 +679,58 @@ impl SegmentHolder {
 
         let mut applied_points: AHashSet<PointIdType> = Default::default();
 
-        let _applied_points_count = self.apply_points(ids, |point_id, idx, write_segment| {
-            if let Some(point_version) = write_segment.point_version(point_id)
-                && point_version >= op_num
-            {
+        let _applied_points_count =
+            self.apply_points(ids, hw_counter, |point_id, idx, write_segment| {
+                if let Some(point_version) = write_segment.point_version(point_id)
+                    && point_version >= op_num
+                {
+                    applied_points.insert(point_id);
+                    return Ok(false);
+                }
+
+                let can_apply_operation =
+                    !write_segment.is_proxy() && write_segment.is_appendable();
+
+                let is_applied = if can_apply_operation {
+                    point_operation(point_id, write_segment)?
+                } else {
+                    self.aloha_random_write(
+                        &appendable_segments,
+                        |appendable_idx, appendable_write_segment| {
+                            // If we are moving point from one segment to another,
+                            // we must guarantee, that data in new segment will be persisted before
+                            // deleting point from old segment.
+                            // Do ensure that, we add a flush dependency
+                            self.flush_dependency.lock().add_dependency(
+                                idx,
+                                appendable_idx,
+                                op_num,
+                            );
+
+                            let mut all_vectors =
+                                write_segment.all_vectors(point_id, hw_counter)?;
+                            let mut payload = write_segment.payload(point_id, hw_counter)?;
+
+                            point_cow_operation(point_id, &mut all_vectors, &mut payload);
+
+                            appendable_write_segment.upsert_point(
+                                op_num,
+                                point_id,
+                                all_vectors,
+                                hw_counter,
+                            )?;
+                            appendable_write_segment
+                                .set_full_payload(op_num, point_id, &payload, hw_counter)?;
+
+                            write_segment.delete_point(op_num, point_id, hw_counter)?;
+
+                            Ok(true)
+                        },
+                    )?
+                };
                 applied_points.insert(point_id);
-                return Ok(false);
-            }
-
-            let can_apply_operation = !write_segment.is_proxy() && write_segment.is_appendable();
-
-            let is_applied = if can_apply_operation {
-                point_operation(point_id, write_segment)?
-            } else {
-                self.aloha_random_write(
-                    &appendable_segments,
-                    |appendable_idx, appendable_write_segment| {
-                        // If we are moving point from one segment to another,
-                        // we must guarantee, that data in new segment will be persisted before
-                        // deleting point from old segment.
-                        // Do ensure that, we add a flush dependency
-                        self.flush_dependency
-                            .lock()
-                            .add_dependency(idx, appendable_idx, op_num);
-
-                        let mut all_vectors = write_segment.all_vectors(point_id, hw_counter)?;
-                        let mut payload = write_segment.payload(point_id, hw_counter)?;
-
-                        point_cow_operation(point_id, &mut all_vectors, &mut payload);
-
-                        appendable_write_segment.upsert_point(
-                            op_num,
-                            point_id,
-                            all_vectors,
-                            hw_counter,
-                        )?;
-                        appendable_write_segment
-                            .set_full_payload(op_num, point_id, &payload, hw_counter)?;
-
-                        write_segment.delete_point(op_num, point_id, hw_counter)?;
-
-                        Ok(true)
-                    },
-                )?
-            };
-            applied_points.insert(point_id);
-            Ok(is_applied)
-        })?;
+                Ok(is_applied)
+            })?;
         Ok(applied_points)
     }
 
