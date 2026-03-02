@@ -924,7 +924,7 @@ impl SegmentHolder {
             .collect::<BTreeMap<_, _>>();
         let point_iterators = locked_segments
             .iter()
-            .map(|(segment_id, locked_segment)| (*segment_id, locked_segment.iter_points()))
+            .map(|(segment_id, locked_segment)| (*segment_id, locked_segment.get_points()))
             .collect::<BTreeMap<_, _>>();
         let mut iterators = point_iterators
             .iter()

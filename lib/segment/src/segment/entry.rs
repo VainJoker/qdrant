@@ -25,7 +25,7 @@ use crate::data_types::query_context::{
 use crate::data_types::segment_record::{NamedVectorsOwned, SegmentRecord};
 use crate::data_types::vectors::{QueryVector, VectorInternal};
 use crate::entry::entry_point::{NonAppendableSegmentEntry, SegmentEntry};
-use crate::id_tracker::{IdTracker, IdTrackerEnum, PointExternalIterator};
+use crate::id_tracker::{IdTracker, IdTrackerEnum, PointMappingsGuard};
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
 use crate::index::{BuildIndexResult, PayloadIndex, VectorIndex};
 use crate::json_path::JsonPath;
@@ -249,14 +249,14 @@ impl NonAppendableSegmentEntry for Segment {
         Ok(records)
     }
 
-    fn iter_points(&self) -> PointExternalIterator<'_> {
+    fn get_points(&self) -> PointMappingsGuard<'_> {
         let id_tracker_guard = self.id_tracker.borrow();
         // Safety: OwningGuard is safe to use here because:
         // 1. The second argument function only accesses the `id_tracker_guard` nested value.
         // 2. The `id_tracker_guard`'s nested value does not escape.
         let owinging_guard =
             unsafe { OwningGuard::new(id_tracker_guard, IdTrackerEnum::point_mappings) };
-        PointExternalIterator {
+        PointMappingsGuard {
             mappings: owinging_guard,
         }
     }
