@@ -254,10 +254,10 @@ impl NonAppendableSegmentEntry for Segment {
         // Safety: OwningGuard is safe to use here because:
         // 1. The second argument function only accesses the `id_tracker_guard` nested value.
         // 2. The `id_tracker_guard`'s nested value does not escape.
-        let owinging_guard =
+        let owning_guard =
             unsafe { OwningGuard::new(id_tracker_guard, IdTrackerEnum::point_mappings) };
         PointMappingsGuard {
-            mappings: owinging_guard,
+            mappings: owning_guard,
         }
     }
 
