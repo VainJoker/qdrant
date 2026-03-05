@@ -1,8 +1,10 @@
+use ahash::AHashSet;
 use common::types::PointOffsetType;
 use itertools::{Either, Itertools};
 use posting_list::{PostingIterator, PostingListView, PostingValue};
 
 use super::posting_list::PostingList;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyDocument;
 use crate::index::field_index::full_text_index::inverted_index::positions::{
     PartialDocument, Positions, TokenPosition,
 };
@@ -191,6 +193,36 @@ pub fn check_compressed_postings_phrase<'a>(
     };
 
     phrase_in_all_postings(point_id, phrase, Vec::new(), &mut posting_iterators)
+}
+
+pub fn check_compressed_postings_fuzzy_phrase<'a>(
+    fuzzy_doc: &FuzzyDocument,
+    point_id: PointOffsetType,
+    token_to_posting: impl Fn(&TokenId) -> Option<PostingListView<'a, Positions>>,
+) -> bool {
+    let unique_tokens: AHashSet<TokenId> = fuzzy_doc
+        .groups()
+        .iter()
+        .flat_map(|group| group.tokens().iter().copied())
+        .collect();
+
+    let mut tokens_positions = Vec::new();
+    for token_id in unique_tokens {
+        if let Some(posting) = token_to_posting(&token_id) {
+            let mut iter = posting.into_iter();
+            if let Some(elem) = iter.advance_until_greater_or_equal(point_id) {
+                if elem.id == point_id {
+                    tokens_positions.extend(elem.value.to_token_positions(token_id));
+                }
+            }
+        }
+    }
+
+    if tokens_positions.is_empty() {
+        return false;
+    }
+
+    PartialDocument::new(tokens_positions).has_fuzzy_phrase(fuzzy_doc)
 }
 
 #[cfg(test)]

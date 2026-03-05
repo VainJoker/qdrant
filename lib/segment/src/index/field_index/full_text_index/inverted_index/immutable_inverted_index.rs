@@ -11,7 +11,7 @@ use super::immutable_postings_enum::ImmutablePostings;
 use super::mmap_inverted_index::MmapInvertedIndex;
 use super::mmap_inverted_index::mmap_postings_enum::MmapPostingsEnum;
 use super::mutable_inverted_index::MutableInvertedIndex;
-use super::positions::{PartialDocument, Positions};
+use super::positions::Positions;
 use super::postings_iterator::{
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
 };
@@ -19,7 +19,8 @@ use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::index::field_index::full_text_index::fuzzy_index::FuzzyDocument;
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
-    check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
+    check_compressed_postings_fuzzy_phrase, check_compressed_postings_phrase,
+    intersect_compressed_postings_phrase_iterator,
 };
 
 #[cfg_attr(test, derive(Clone))]
@@ -248,26 +249,9 @@ impl ImmutableInvertedIndex {
 
         match &self.postings {
             ImmutablePostings::WithPositions(postings) => {
-                // Collect positions for all expanded token IDs across all groups
-                let mut all_positions = Vec::new();
-                for group in groups {
-                    for &token_id in group.tokens() {
-                        if let Some(posting) = postings.get(token_id as usize) {
-                            let view = PostingList::view(posting);
-                            for elem in view.into_iter() {
-                                if elem.id == point_id {
-                                    all_positions.extend(elem.value.to_token_positions(token_id));
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if all_positions.is_empty() {
-                    return false;
-                }
-
-                PartialDocument::new(all_positions).has_fuzzy_phrase(fuzzy_doc)
+                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |token_id| {
+                    postings.get(*token_id as usize).map(PostingList::view)
+                })
             }
             // Without positional information, fall back to AND semantics
             ImmutablePostings::Ids(_) => false,
