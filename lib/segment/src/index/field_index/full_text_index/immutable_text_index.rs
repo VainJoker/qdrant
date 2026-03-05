@@ -60,7 +60,11 @@ impl ImmutableFullTextIndex {
         let mutable = MutableInvertedIndex::build_index(iter, phrase_matching)?;
 
         let inverted_index = ImmutableInvertedIndex::from(mutable);
-        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+        let fst_index = if config.fuzzy_matching.unwrap_or_default() {
+            FuzzyExpander::build(&inverted_index.vocab)
+        } else {
+            None
+        };
 
         Ok(Some(Self {
             inverted_index,
@@ -78,8 +82,11 @@ impl ImmutableFullTextIndex {
         // ToDo(rocksdb): But once the RocksDB is removed, we can always use the tokenizer from the index.
         let tokenizer = index.tokenizer.clone();
 
-        // Build FST from the in-memory vocab
-        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+        // Reuse the FST from the mmap index if available (already conditional on fuzzy_matching)
+        let fst_index = index
+            .fst_index
+            .as_ref()
+            .and_then(|expander| FuzzyExpander::from_bytes(expander.to_bytes().to_vec()));
 
         // Index is now loaded into memory, clear cache of backing mmap storage
         if let Err(err) = index.clear_cache() {
@@ -168,7 +175,7 @@ impl ImmutableFullTextIndex {
         let MutableFullTextIndex {
             inverted_index,
             fst_index: _,
-            config: _,
+            config,
             tokenizer,
             storage,
         } = mutable;
@@ -180,7 +187,11 @@ impl ImmutableFullTextIndex {
         };
 
         let inverted_index = ImmutableInvertedIndex::from(inverted_index);
-        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+        let fst_index = if config.fuzzy_matching.unwrap_or_default() {
+            FuzzyExpander::build(&inverted_index.vocab)
+        } else {
+            None
+        };
 
         Self {
             inverted_index,

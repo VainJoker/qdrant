@@ -66,20 +66,17 @@ impl<'py> IntoPyObject<'py> for PyMatch {
             Match::Phrase(phrase) => PyMatchPhrase(phrase).into_bound_py_any(py),
             Match::Any(any) => PyMatchAny(any).into_bound_py_any(py),
             Match::Except(except) => PyMatchExcept(except).into_bound_py_any(py),
-            Match::Fuzzy(match_fuzzy) => {
-                // Lossy: degrade fuzzy to text/phrase/text_any for Python edge bindings
-                match match_fuzzy {
-                    MatchFuzzy::Text { text, .. } => {
-                        PyMatchText(MatchText { text }).into_bound_py_any(py)
-                    }
-                    MatchFuzzy::Phrase { phrase, .. } => {
-                        PyMatchPhrase(MatchPhrase { phrase }).into_bound_py_any(py)
-                    }
-                    MatchFuzzy::TextAny { text_any, .. } => {
-                        PyMatchTextAny(MatchTextAny { text_any }).into_bound_py_any(py)
-                    }
+            Match::Fuzzy(match_fuzzy) => match match_fuzzy {
+                MatchFuzzy::Text { text, .. } => {
+                    PyMatchText(MatchText { text }).into_bound_py_any(py)
                 }
-            }
+                MatchFuzzy::Phrase { phrase, .. } => {
+                    PyMatchPhrase(MatchPhrase { phrase }).into_bound_py_any(py)
+                }
+                MatchFuzzy::TextAny { text_any, .. } => {
+                    PyMatchTextAny(MatchTextAny { text_any }).into_bound_py_any(py)
+                }
+            },
         }
     }
 }

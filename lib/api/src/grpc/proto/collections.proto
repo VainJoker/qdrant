@@ -672,6 +672,9 @@ message TextIndexParams {
   // If true, builds additional HNSW links (Need payload_m > 0).
   // Default: true.
   optional bool enable_hnsw = 10;
+  // If true - build an FST index for fuzzy matching.
+  // Default: false.
+  optional bool fuzzy_matching = 11;
 }
 
 message StemmingAlgorithm {

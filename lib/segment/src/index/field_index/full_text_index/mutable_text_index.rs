@@ -140,6 +140,9 @@ impl MutableFullTextIndex {
     }
 
     pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
+        if !self.config.fuzzy_matching.unwrap_or_default() {
+            return None;
+        }
         self.fst_index
             .get_or_init(|| FuzzyExpander::build(&self.inverted_index.vocab))
             .as_ref()
@@ -406,6 +409,7 @@ mod tests {
             max_token_len: None,
             lowercase: None,
             phrase_matching: None,
+            fuzzy_matching: None,
             on_disk: None,
             stopwords: None,
             stemmer: None,

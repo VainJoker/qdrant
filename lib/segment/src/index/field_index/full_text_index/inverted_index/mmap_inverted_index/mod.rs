@@ -384,7 +384,7 @@ impl MmapInvertedIndex {
                 PartialDocument::new(all_positions).has_fuzzy_phrase(fuzzy_doc)
             }
             // Without positional information, fall back to AND semantics
-            MmapPostingsEnum::Ids(_) => groups.iter().all(|ts| self.check_has_any(ts, point_id)),
+            MmapPostingsEnum::Ids(_) => false,
         }
     }
 

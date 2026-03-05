@@ -2211,10 +2211,15 @@ impl Display for PayloadFieldSchema {
                     }
                 }
                 PayloadSchemaParams::Text(text_params) => {
-                    if text_params.phrase_matching.unwrap_or_default() {
-                        write!(f, "text (with phrase_matching: true)")
-                    } else {
-                        write!(f, "text")
+                    let phrase = text_params.phrase_matching.unwrap_or_default();
+                    let fuzzy = text_params.fuzzy_matching.unwrap_or_default();
+                    match (phrase, fuzzy) {
+                        (true, true) => {
+                            write!(f, "text (with phrase_matching: true, fuzzy_matching: true)")
+                        }
+                        (true, false) => write!(f, "text (with phrase_matching: true)"),
+                        (false, true) => write!(f, "text (with fuzzy_matching: true)"),
+                        (false, false) => write!(f, "text"),
                     }
                 }
             },

@@ -37,10 +37,11 @@ impl MmapFullTextIndex {
         let populate = !is_on_disk;
 
         let has_positions = config.phrase_matching == Some(true);
+        let with_fuzzy = config.fuzzy_matching == Some(true);
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
 
         let fst_path = path.join(FST_FILE);
-        let fst_index = if fst_path.is_file() {
+        let fst_index = if with_fuzzy && fst_path.is_file() {
             let data = fs::read(&fst_path)?;
             FuzzyExpander::from_bytes(data)
         } else {
@@ -217,9 +218,13 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
 
         let immutable = ImmutableInvertedIndex::from(mutable_index);
 
-        // Build FST from the immutable vocab and persist to disk
-        let fst_bytes =
-            FuzzyExpander::build(&immutable.vocab).map(|expander| expander.to_bytes().to_vec());
+        // Build FST from the immutable vocab and persist to disk only if fuzzy_matching is enabled
+        let with_fuzzy = config.fuzzy_matching.unwrap_or_default();
+        let fst_bytes = if with_fuzzy {
+            FuzzyExpander::build(&immutable.vocab).map(|expander| expander.to_bytes().to_vec())
+        } else {
+            None
+        };
         if let Some(ref bytes) = fst_bytes {
             fs::create_dir_all(path.as_path())?;
             fs::write(path.join(FST_FILE), bytes)?;
