@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
@@ -18,6 +19,7 @@ use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDeleteWrapper;
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::ValueIndexer;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyExpander;
 use crate::index::payload_config::StorageType;
 
 const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
@@ -29,6 +31,7 @@ const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
 
 pub struct MutableFullTextIndex {
     pub(super) inverted_index: MutableInvertedIndex,
+    pub(super) fst_index: OnceLock<Option<FuzzyExpander>>,
     pub(super) config: TextIndexParams,
     pub(super) storage: Storage,
     pub(super) tokenizer: Tokenizer,
@@ -70,6 +73,7 @@ impl MutableFullTextIndex {
 
         Ok(Some(Self {
             inverted_index: MutableInvertedIndex::build_index(iter, phrase_matching)?,
+            fst_index: OnceLock::new(),
             config,
             storage: Storage::RocksDb(db_wrapper),
             tokenizer,
@@ -128,10 +132,17 @@ impl MutableFullTextIndex {
 
         Ok(Some(Self {
             inverted_index: builder.build(),
+            fst_index: OnceLock::new(),
             config,
             storage: Storage::Gridstore(store),
             tokenizer,
         }))
+    }
+
+    pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
+        self.fst_index
+            .get_or_init(|| FuzzyExpander::build(&self.inverted_index.vocab))
+            .as_ref()
     }
 
     #[inline]
@@ -222,6 +233,8 @@ impl MutableFullTextIndex {
         }
 
         let tokens = self.inverted_index.register_tokens(&str_tokens);
+
+        self.fst_index = OnceLock::new();
 
         let phrase_matching = self.config.phrase_matching.unwrap_or_default();
         if phrase_matching {

@@ -46,11 +46,17 @@ impl MutableInvertedIndex {
         Ok(builder.build())
     }
 
-    fn get_tokens(&self, idx: PointOffsetType) -> Option<&TokenSet> {
+    pub(in crate::index::field_index::full_text_index) fn get_tokens(
+        &self,
+        idx: PointOffsetType,
+    ) -> Option<&TokenSet> {
         self.point_to_tokens.get(idx as usize)?.as_ref()
     }
 
-    fn get_document(&self, idx: PointOffsetType) -> Option<&Document> {
+    pub(in crate::index::field_index::full_text_index) fn get_document(
+        &self,
+        idx: PointOffsetType,
+    ) -> Option<&Document> {
         self.point_to_doc.as_ref()?.get(idx as usize)?.as_ref()
     }
 
@@ -79,7 +85,10 @@ impl MutableInvertedIndex {
         Either::Right(intersect_postings_iterator(postings))
     }
 
-    fn filter_has_any(&self, tokens: TokenSet) -> impl Iterator<Item = PointOffsetType> + '_ {
+    pub(in crate::index::field_index::full_text_index) fn filter_has_any(
+        &self,
+        tokens: TokenSet,
+    ) -> impl Iterator<Item = PointOffsetType> + '_ {
         let postings_opt: Vec<_> = tokens
             .tokens()
             .iter()

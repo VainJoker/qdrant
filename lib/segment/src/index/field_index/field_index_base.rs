@@ -189,6 +189,11 @@ impl FieldIndex {
                 Some(Match::Phrase(MatchPhrase { phrase })) => Some(
                     full_text_index.check_payload_match::<true>(payload_value, phrase, hw_counter),
                 ),
+                Some(Match::Fuzzy(match_fuzzy)) => Some(full_text_index.check_payload_fuzzy_match(
+                    payload_value,
+                    match_fuzzy,
+                    hw_counter,
+                )),
                 _ => None,
             },
             FieldIndex::UuidIndex(_) => None,

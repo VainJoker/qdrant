@@ -15,6 +15,7 @@ use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDeleteWrapper;
 #[cfg(feature = "rocksdb")]
 use crate::data_types::index::TextIndexParams;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyExpander;
 #[cfg(feature = "rocksdb")]
 use crate::index::field_index::full_text_index::mutable_text_index::{self, MutableFullTextIndex};
 use crate::index::field_index::full_text_index::tokenizers::Tokenizer;
@@ -22,6 +23,7 @@ use crate::index::payload_config::StorageType;
 
 pub struct ImmutableFullTextIndex {
     pub(super) inverted_index: ImmutableInvertedIndex,
+    pub(super) fst_index: Option<FuzzyExpander>,
     pub(super) tokenizer: Tokenizer,
     // Backing storage, source of state, persists deletions
     pub(super) storage: Storage,
@@ -57,8 +59,12 @@ impl ImmutableFullTextIndex {
 
         let mutable = MutableInvertedIndex::build_index(iter, phrase_matching)?;
 
+        let inverted_index = ImmutableInvertedIndex::from(mutable);
+        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+
         Ok(Some(Self {
-            inverted_index: ImmutableInvertedIndex::from(mutable),
+            inverted_index,
+            fst_index,
             tokenizer,
             storage: Storage::RocksDb(db_wrapper),
         }))
@@ -72,6 +78,9 @@ impl ImmutableFullTextIndex {
         // ToDo(rocksdb): But once the RocksDB is removed, we can always use the tokenizer from the index.
         let tokenizer = index.tokenizer.clone();
 
+        // Build FST from the in-memory vocab
+        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+
         // Index is now loaded into memory, clear cache of backing mmap storage
         if let Err(err) = index.clear_cache() {
             log::warn!("Failed to clear mmap cache of ram mmap full text index: {err}");
@@ -81,6 +90,7 @@ impl ImmutableFullTextIndex {
             inverted_index,
             storage: Storage::Mmap(Box::new(index)),
             tokenizer,
+            fst_index,
         }
     }
 
@@ -99,6 +109,10 @@ impl ImmutableFullTextIndex {
             }
         }
         Ok(())
+    }
+
+    pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
+        self.fst_index.as_ref()
     }
 
     pub fn wipe(self) -> OperationResult<()> {
@@ -153,6 +167,7 @@ impl ImmutableFullTextIndex {
     pub fn from_rocksdb_mutable(mutable: MutableFullTextIndex) -> Self {
         let MutableFullTextIndex {
             inverted_index,
+            fst_index: _,
             config: _,
             tokenizer,
             storage,
@@ -164,8 +179,12 @@ impl ImmutableFullTextIndex {
             );
         };
 
+        let inverted_index = ImmutableInvertedIndex::from(inverted_index);
+        let fst_index = FuzzyExpander::build(&inverted_index.vocab);
+
         Self {
-            inverted_index: ImmutableInvertedIndex::from(inverted_index),
+            inverted_index,
+            fst_index,
             tokenizer,
             storage: Storage::RocksDb(db),
         }

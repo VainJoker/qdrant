@@ -7,6 +7,7 @@ use tempfile::Builder;
 use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
 use crate::index::field_index::full_text_index::text_index::FullTextIndex;
 use crate::index::field_index::{FieldIndexBuilderTrait as _, ValueIndexer};
+use crate::types::{Fuzzy, FuzzyParams, MatchFuzzy};
 
 fn movie_titles() -> Vec<String> {
     vec![
@@ -397,4 +398,137 @@ fn test_ascii_folding_in_full_text_index_word() {
         .filter_query(query_acento2, &hw_counter)
         .collect();
     assert!(results_acento2.contains(&0));
+}
+
+#[test]
+fn test_fuzzy_parse_requires_candidates_for_each_token() {
+    let hw_counter = HardwareCounterCell::default();
+
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        min_token_len: None,
+        max_token_len: None,
+        lowercase: Some(true),
+        on_disk: None,
+        phrase_matching: Some(true),
+        stopwords: None,
+        stemmer: None,
+        ascii_folding: None,
+        enable_hnsw: None,
+    };
+
+    let mut index = FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), config, true)
+        .unwrap()
+        .unwrap();
+
+    index
+        .add_many(0, vec!["quick brown fox".to_string()], &hw_counter)
+        .unwrap();
+    index
+        .add_many(1, vec!["quick red dog".to_string()], &hw_counter)
+        .unwrap();
+
+    let params = FuzzyParams {
+        max_edit: 1,
+        prefix_length: 0,
+        max_expansions: 30,
+    };
+
+    let fuzzy_text = MatchFuzzy {
+        fuzzy: Fuzzy::Text {
+            text: "quick zzzzzzz".to_string(),
+            params: Some(params.clone()),
+        },
+    };
+    assert!(index.parse_fuzzy_query(&fuzzy_text, &hw_counter).is_none());
+
+    let fuzzy_phrase = MatchFuzzy {
+        fuzzy: Fuzzy::Phrase {
+            phrase: "quick zzzzzzz".to_string(),
+            params: Some(params.clone()),
+        },
+    };
+    assert!(
+        index
+            .parse_fuzzy_query(&fuzzy_phrase, &hw_counter)
+            .is_none()
+    );
+
+    let fuzzy_text_any = MatchFuzzy {
+        fuzzy: Fuzzy::TextAny {
+            text_any: "quick zzzzzzz".to_string(),
+            params: Some(params),
+        },
+    };
+    assert!(
+        index
+            .parse_fuzzy_query(&fuzzy_text_any, &hw_counter)
+            .is_some()
+    );
+}
+
+#[test]
+fn test_fuzzy_phrase_preserves_order() {
+    let hw_counter = HardwareCounterCell::default();
+
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        min_token_len: None,
+        max_token_len: None,
+        lowercase: Some(true),
+        on_disk: None,
+        phrase_matching: Some(true),
+        stopwords: None,
+        stemmer: None,
+        ascii_folding: None,
+        enable_hnsw: None,
+    };
+
+    let mut index = FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), config, true)
+        .unwrap()
+        .unwrap();
+
+    index
+        .add_many(
+            0,
+            vec!["the quick brown fox jumps".to_string()],
+            &hw_counter,
+        )
+        .unwrap();
+    index
+        .add_many(
+            1,
+            vec!["the brown quick fox jumps".to_string()],
+            &hw_counter,
+        )
+        .unwrap();
+    index
+        .add_many(2, vec!["the quick red fox jumps".to_string()], &hw_counter)
+        .unwrap();
+
+    let fuzzy_phrase = MatchFuzzy {
+        fuzzy: Fuzzy::Phrase {
+            phrase: "quik brown fox".to_string(),
+            params: Some(FuzzyParams {
+                max_edit: 1,
+                prefix_length: 0,
+                max_expansions: 30,
+            }),
+        },
+    };
+
+    let query = index
+        .parse_fuzzy_query(&fuzzy_phrase, &hw_counter)
+        .expect("fuzzy phrase query should parse");
+
+    assert!(index.fuzzy_check_match(&query, 0));
+    assert!(!index.fuzzy_check_match(&query, 1));
+    assert!(!index.fuzzy_check_match(&query, 2));
+
+    let results: Vec<_> = index.fuzzy_filter_query(query, &hw_counter).collect();
+    assert_eq!(results, vec![0]);
 }

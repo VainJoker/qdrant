@@ -13,6 +13,7 @@ use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::fuzzy_index::{FuzzyDocument, FuzzyIndex, FuzzyParsedQuery};
 use super::immutable_text_index::ImmutableFullTextIndex;
 use super::inverted_index::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
@@ -32,7 +33,9 @@ use crate::index::field_index::{
 };
 use crate::index::payload_config::{IndexMutability, StorageType};
 use crate::telemetry::PayloadIndexTelemetry;
-use crate::types::{FieldCondition, Match, MatchPhrase, MatchText, PayloadKeyType};
+use crate::types::{
+    FieldCondition, Fuzzy, FuzzyParams, Match, MatchFuzzy, MatchPhrase, MatchText, PayloadKeyType,
+};
 
 pub enum FullTextIndex {
     Mutable(MutableFullTextIndex),
@@ -215,6 +218,45 @@ impl FullTextIndex {
         }
     }
 
+    pub(super) fn fuzzy_filter_query<'a>(
+        &'a self,
+        query: FuzzyParsedQuery,
+        hw_counter: &'a HardwareCounterCell,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        match self {
+            Self::Mutable(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
+            Self::Immutable(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
+            Self::Mmap(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
+        }
+    }
+
+    pub fn fuzzy_check_match(&self, query: &FuzzyParsedQuery, point_id: PointOffsetType) -> bool {
+        match self {
+            Self::Mutable(index) => index.inverted_index.fuzzy_check_match(query, point_id),
+            Self::Immutable(index) => index.inverted_index.fuzzy_check_match(query, point_id),
+            Self::Mmap(index) => index.inverted_index.fuzzy_check_match(query, point_id),
+        }
+    }
+
+    pub(super) fn fuzzy_estimate_query_cardinality(
+        &self,
+        query: &FuzzyParsedQuery,
+        condition: &FieldCondition,
+        hw_counter: &HardwareCounterCell,
+    ) -> CardinalityEstimation {
+        match self {
+            Self::Mutable(index) => index
+                .inverted_index
+                .fuzzy_estimate_cardinality(query, condition, hw_counter),
+            Self::Immutable(index) => index
+                .inverted_index
+                .fuzzy_estimate_cardinality(query, condition, hw_counter),
+            Self::Mmap(index) => index
+                .inverted_index
+                .fuzzy_estimate_cardinality(query, condition, hw_counter),
+        }
+    }
+
     pub fn values_count(&self, point_id: PointOffsetType) -> usize {
         match self {
             Self::Mutable(index) => index.inverted_index.values_count(point_id),
@@ -321,6 +363,99 @@ impl FullTextIndex {
         Some(ParsedQuery::AnyTokens(tokens))
     }
 
+    pub fn parse_fuzzy_query(
+        &self,
+        match_fuzzy: &MatchFuzzy,
+        hw_counter: &HardwareCounterCell,
+    ) -> Option<FuzzyParsedQuery> {
+        let expander = match self {
+            Self::Mutable(index) => index.get_fuzzy_expander(),
+            Self::Immutable(index) => index.get_fuzzy_expander(),
+            Self::Mmap(index) => index.get_fuzzy_expander(),
+        }?;
+
+        let vocab_lookup = |term: &str| self.get_token(term, hw_counter);
+
+        let default_fuzzy_params = FuzzyParams::default();
+
+        match &match_fuzzy.fuzzy {
+            Fuzzy::Text { text, params } => {
+                // Text (AND semantics): each query token must match at least one
+                // expanded candidate. We create a TokenSet per query token (OR group),
+                // and the filter intersects across groups.
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                let mut token_sets: Vec<TokenSet> = Vec::new();
+                let mut has_query_tokens = false;
+                let mut has_token_without_candidates = false;
+
+                self.get_tokenizer().tokenize_query(text, |token| {
+                    has_query_tokens = true;
+                    let candidates = expander.expand_term(&token, params, &vocab_lookup);
+                    let ids: AHashSet<TokenId> =
+                        candidates.into_iter().map(|c| c.token_id).collect();
+                    if ids.is_empty() {
+                        has_token_without_candidates = true;
+                    } else {
+                        token_sets.push(TokenSet::from(ids));
+                    }
+                });
+
+                if !has_query_tokens || has_token_without_candidates {
+                    return None;
+                }
+
+                Some(FuzzyParsedQuery::AllTokens(FuzzyDocument::new(token_sets)))
+            }
+            Fuzzy::TextAny { text_any, params } => {
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                // TextAny (OR semantics): any query token matching any expanded
+                // candidate is sufficient.
+                let mut all_token_ids = AHashSet::new();
+
+                self.get_tokenizer().tokenize_query(text_any, |token| {
+                    let candidates = expander.expand_term(&token, params, &vocab_lookup);
+                    for candidate in candidates {
+                        all_token_ids.insert(candidate.token_id);
+                    }
+                });
+
+                if all_token_ids.is_empty() {
+                    return None;
+                }
+
+                Some(FuzzyParsedQuery::AnyTokens(TokenSet::from(all_token_ids)))
+            }
+            Fuzzy::Phrase { phrase, params } => {
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                // Phrase fuzzy: expand each phrase token into a set of candidate
+                // token IDs, preserving position order. The inverted-index level
+                // filters candidates (AND), and check_match verifies sliding-window
+                // positional ordering.
+                let mut token_sets: Vec<TokenSet> = Vec::new();
+                let mut has_query_tokens = false;
+                let mut has_token_without_candidates = false;
+
+                self.get_tokenizer().tokenize_query(phrase, |token| {
+                    has_query_tokens = true;
+                    let candidates = expander.expand_term(&token, params, &vocab_lookup);
+                    let ids: AHashSet<TokenId> =
+                        candidates.into_iter().map(|c| c.token_id).collect();
+                    if ids.is_empty() {
+                        has_token_without_candidates = true;
+                    } else {
+                        token_sets.push(TokenSet::from(ids));
+                    }
+                });
+
+                if !has_query_tokens || has_token_without_candidates {
+                    return None;
+                }
+
+                Some(FuzzyParsedQuery::Phrase(FuzzyDocument::new(token_sets)))
+            }
+        }
+    }
+
     pub fn parse_tokenset(&self, text: &str, hw_counter: &HardwareCounterCell) -> TokenSet {
         let mut tokenset = AHashSet::new();
         self.get_tokenizer().tokenize_doc(text, |token| {
@@ -395,6 +530,40 @@ impl FullTextIndex {
                 ParsedQuery::AnyTokens(query) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
                     tokenset.has_any(query)
+                }
+            })
+    }
+
+    /// Checks the text directly against the payload value using fuzzy matching.
+    /// This is the fallback path when the index is used for `special_check_condition`.
+    pub fn check_payload_fuzzy_match(
+        &self,
+        payload_value: &serde_json::Value,
+        match_fuzzy: &MatchFuzzy,
+        hw_counter: &HardwareCounterCell,
+    ) -> bool {
+        let query_opt = self.parse_fuzzy_query(match_fuzzy, hw_counter);
+
+        let Some(query) = query_opt else {
+            return false;
+        };
+
+        FullTextIndex::get_values(payload_value)
+            .iter()
+            .any(|value| match &query {
+                FuzzyParsedQuery::AllTokens(fuzzy_doc) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
+                }
+                FuzzyParsedQuery::AnyTokens(q) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    tokenset.has_any(q)
+                }
+                FuzzyParsedQuery::Phrase(fuzzy_doc) => {
+                    let document = self.parse_document(value, hw_counter);
+                    document
+                        .map(|doc| fuzzy_doc.matches_document(&doc))
+                        .unwrap_or(false)
                 }
             })
     }
@@ -595,6 +764,12 @@ impl PayloadFieldIndex for FullTextIndex {
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
     ) -> Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>> {
+        // Fuzzy queries use a separate dispatch path
+        if let Some(Match::Fuzzy(match_fuzzy)) = &condition.r#match {
+            let fuzzy_query = self.parse_fuzzy_query(match_fuzzy, hw_counter)?;
+            return Some(self.fuzzy_filter_query(fuzzy_query, hw_counter));
+        }
+
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {
@@ -615,6 +790,19 @@ impl PayloadFieldIndex for FullTextIndex {
         condition: &FieldCondition,
         hw_counter: &HardwareCounterCell,
     ) -> Option<CardinalityEstimation> {
+        // Fuzzy queries use a separate dispatch path
+        if let Some(Match::Fuzzy(match_fuzzy)) = &condition.r#match {
+            let fuzzy_query = self.parse_fuzzy_query(match_fuzzy, hw_counter);
+            let Some(fuzzy_query) = fuzzy_query else {
+                return Some(CardinalityEstimation::exact(0));
+            };
+            return Some(self.fuzzy_estimate_query_cardinality(
+                &fuzzy_query,
+                condition,
+                hw_counter,
+            ));
+        }
+
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {

@@ -86,6 +86,7 @@ validator = { workspace = true }
 chrono = { workspace = true }
 ecow = { workspace = true }
 fnv = { workspace = true }
+fst = { version = "0.4", features = ["levenshtein"] }
 indexmap = { workspace = true }
 ahash = { workspace = true }
 self_cell = { workspace = true }

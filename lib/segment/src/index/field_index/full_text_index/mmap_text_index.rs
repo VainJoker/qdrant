@@ -14,13 +14,17 @@ use super::tokenizers::Tokenizer;
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyExpander;
 use crate::index::field_index::full_text_index::immutable_text_index::{
     ImmutableFullTextIndex, Storage,
 };
 use crate::index::field_index::{FieldIndexBuilderTrait, ValueIndexer};
 
+const FST_FILE: &str = "fst.dat";
+
 pub struct MmapFullTextIndex {
     pub(super) inverted_index: MmapInvertedIndex,
+    pub(super) fst_index: Option<FuzzyExpander>,
     pub(super) tokenizer: Tokenizer,
 }
 
@@ -35,19 +39,38 @@ impl MmapFullTextIndex {
         let has_positions = config.phrase_matching == Some(true);
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
 
+        let fst_path = path.join(FST_FILE);
+        let fst_index = if fst_path.is_file() {
+            let data = fs::read(&fst_path)?;
+            FuzzyExpander::from_bytes(data)
+        } else {
+            None
+        };
+
         let inverted_index = MmapInvertedIndex::open(path, populate, has_positions)?;
         Ok(inverted_index.map(|inverted_index| Self {
             inverted_index,
+            fst_index,
             tokenizer,
         }))
     }
 
     pub fn files(&self) -> Vec<PathBuf> {
-        self.inverted_index.files()
+        let mut files = self.inverted_index.files();
+        let fst_path = self.inverted_index.path.join(FST_FILE);
+        if fst_path.is_file() {
+            files.push(fst_path);
+        }
+        files
     }
 
     pub fn immutable_files(&self) -> Vec<PathBuf> {
-        self.inverted_index.immutable_files()
+        let mut files = self.inverted_index.immutable_files();
+        let fst_path = self.inverted_index.path.join(FST_FILE);
+        if fst_path.is_file() {
+            files.push(fst_path);
+        }
+        files
     }
 
     fn path(&self) -> &PathBuf {
@@ -89,6 +112,10 @@ impl MmapFullTextIndex {
     pub fn clear_cache(&self) -> OperationResult<()> {
         self.inverted_index.clear_cache()?;
         Ok(())
+    }
+
+    pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
+        self.fst_index.as_ref()
     }
 }
 
@@ -190,6 +217,14 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
 
         let immutable = ImmutableInvertedIndex::from(mutable_index);
 
+        // Build FST from the immutable vocab and persist to disk
+        let fst_bytes =
+            FuzzyExpander::build(&immutable.vocab).map(|expander| expander.to_bytes().to_vec());
+        if let Some(ref bytes) = fst_bytes {
+            fs::create_dir_all(path.as_path())?;
+            fs::write(path.join(FST_FILE), bytes)?;
+        }
+
         fs::create_dir_all(path.as_path())?;
 
         MmapInvertedIndex::create(path.clone(), &immutable)?;
@@ -203,16 +238,22 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
                 )
             })?;
 
+        let mmap_fst = fst_bytes
+            .as_ref()
+            .and_then(|b| FuzzyExpander::from_bytes(b.clone()));
         let mmap_index = MmapFullTextIndex {
             inverted_index,
+            fst_index: mmap_fst,
             tokenizer: tokenizer.clone(),
         };
 
         let text_index = if is_on_disk {
             FullTextIndex::Mmap(Box::new(mmap_index))
         } else {
+            let immutable_fst = fst_bytes.and_then(FuzzyExpander::from_bytes);
             FullTextIndex::Immutable(ImmutableFullTextIndex {
                 inverted_index: immutable,
+                fst_index: immutable_fst,
                 tokenizer,
                 storage: Storage::Mmap(Box::new(mmap_index)),
             })

@@ -1,3 +1,4 @@
+pub mod fuzzy_index;
 mod immutable_text_index;
 mod inverted_index;
 pub mod mmap_text_index;

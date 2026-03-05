@@ -1,6 +1,7 @@
 use posting_list::{PostingValue, UnsizedHandler, UnsizedValue};
 use zerocopy::{FromBytes, IntoBytes};
 
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyDocument;
 use crate::index::field_index::full_text_index::inverted_index::{Document, TokenId};
 
 /// Represents a list of positions of a token in a document.
@@ -88,6 +89,32 @@ impl PartialDocument {
                 seq_window
                     .zip(phrase)
                     .all(|(doc_token, query_token)| &doc_token == query_token)
+            }),
+        }
+    }
+
+    /// Returns true if any sequential window of tokens match the given fuzzy phrase.
+    ///
+    /// Each group[i] is a set of fuzzy-expanded token IDs for position i.
+    /// The document must contain a contiguous window of len(groups) with sequential
+    /// positions where window[i] matches at least one token in groups[i].
+    pub fn has_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument) -> bool {
+        let groups = fuzzy_doc.groups();
+        match groups {
+            // no groups -> no match
+            [] => false,
+
+            // single group -> match if any token matches any expanded candidate
+            [group] => self
+                .0
+                .iter()
+                .any(|tok_pos| group.contains(&tok_pos.token_id)),
+
+            // multiple groups -> match if any sequential window matches
+            groups => self.sequential_windows(groups.len()).any(|seq_window| {
+                seq_window
+                    .zip(groups)
+                    .all(|(doc_token, group)| group.contains(&doc_token))
             }),
         }
     }

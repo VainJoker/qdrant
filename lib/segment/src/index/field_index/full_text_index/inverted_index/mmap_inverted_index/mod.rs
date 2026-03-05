@@ -14,7 +14,7 @@ use mmap_postings::{MmapPostingValue, MmapPostings};
 use super::immutable_inverted_index::ImmutableInvertedIndex;
 use super::immutable_postings_enum::ImmutablePostings;
 use super::mmap_inverted_index::mmap_postings_enum::MmapPostingsEnum;
-use super::positions::Positions;
+use super::positions::{PartialDocument, Positions};
 use super::postings_iterator::{
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
 };
@@ -22,6 +22,7 @@ use super::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::Flusher;
 use crate::common::mmap_bitslice_buffered_update_wrapper::MmapBitSliceBufferedUpdateWrapper;
 use crate::common::operation_error::{OperationError, OperationResult};
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyDocument;
 use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
     check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
@@ -210,7 +211,7 @@ impl MmapInvertedIndex {
     }
 
     /// Iterate over point ids whose documents contain at least one of the given tokens
-    fn filter_has_any<'a>(
+    pub(in crate::index::field_index::full_text_index) fn filter_has_any<'a>(
         &'a self,
         tokens: TokenSet,
     ) -> impl Iterator<Item = PointOffsetType> + 'a {
@@ -279,7 +280,11 @@ impl MmapInvertedIndex {
         }
     }
 
-    fn check_has_any(&self, tokens: &TokenSet, point_id: PointOffsetType) -> bool {
+    pub(in crate::index::field_index::full_text_index) fn check_has_any(
+        &self,
+        tokens: &TokenSet,
+        point_id: PointOffsetType,
+    ) -> bool {
         if tokens.is_empty() {
             return false;
         }
@@ -342,6 +347,44 @@ impl MmapInvertedIndex {
             }
             // cannot do phrase matching if there's no positional information
             MmapPostingsEnum::Ids(_postings) => false,
+        }
+    }
+
+    /// Checks if the point document contains a fuzzy phrase:
+    /// a contiguous window where position i matches at least one token in groups[i].
+    pub fn check_has_fuzzy_phrase(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        point_id: PointOffsetType,
+    ) -> bool {
+        let groups = fuzzy_doc.groups();
+        if groups.is_empty() || !self.is_active(point_id) {
+            return false;
+        }
+
+        match &self.storage.postings {
+            MmapPostingsEnum::WithPositions(postings) => {
+                let mut all_positions = Vec::new();
+                for group in groups {
+                    for &token_id in group.tokens() {
+                        if let Some(view) = postings.get(token_id) {
+                            for elem in view.into_iter() {
+                                if elem.id == point_id {
+                                    all_positions.extend(elem.value.to_token_positions(token_id));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if all_positions.is_empty() {
+                    return false;
+                }
+
+                PartialDocument::new(all_positions).has_fuzzy_phrase(fuzzy_doc)
+            }
+            // Without positional information, fall back to AND semantics
+            MmapPostingsEnum::Ids(_) => groups.iter().all(|ts| self.check_has_any(ts, point_id)),
         }
     }
 

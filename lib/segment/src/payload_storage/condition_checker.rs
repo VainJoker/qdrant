@@ -7,8 +7,8 @@ use serde_json::Value;
 
 use crate::types::{
     AnyVariants, DateTimePayloadType, FieldCondition, FloatPayloadType, GeoBoundingBox, GeoPoint,
-    GeoPolygon, GeoRadius, Match, MatchAny, MatchExcept, MatchPhrase, MatchText, MatchTextAny,
-    MatchValue, Range, RangeInterface, ValueVariants, ValuesCount,
+    GeoPolygon, GeoRadius, Match, MatchAny, MatchExcept, MatchFuzzy, MatchPhrase, MatchText,
+    MatchTextAny, MatchValue, Range, RangeInterface, ValueVariants, ValuesCount,
 };
 
 /// Threshold representing the point to which iterating through an IndexSet is more efficient than using hashing.
@@ -172,6 +172,71 @@ impl ValueChecker for Match {
                     .any(|token| stored.contains(token)),
                 _ => false,
             },
+            Match::Fuzzy(MatchFuzzy {
+                fuzzy: crate::types::Fuzzy::Text { text, params },
+            }) => {
+                let params = params.clone().unwrap_or_default();
+                match payload {
+                    Value::String(stored) => {
+                        // Iterate over tokens in the stored string
+                        stored.split_whitespace().any(|token| {
+                            check_levenshtein_match(
+                                token,
+                                text,
+                                params.max_edit,
+                                params.prefix_length,
+                            )
+                        })
+                    }
+                    _ => false,
+                }
+            }
+            Match::Fuzzy(MatchFuzzy {
+                fuzzy: crate::types::Fuzzy::Phrase { phrase, params },
+            }) => {
+                let params = params.clone().unwrap_or_default();
+                match payload {
+                    Value::String(stored) => {
+                        // For phrase fuzzy: each query word must fuzzy-match a stored word,
+                        // and they must appear in order
+                        let query_words: Vec<&str> = phrase.split_whitespace().collect();
+                        let stored_words: Vec<&str> = stored.split_whitespace().collect();
+                        if query_words.is_empty() {
+                            return false;
+                        }
+                        // Sliding window: find a contiguous subsequence of stored words
+                        // where each matches the corresponding query word fuzzily
+                        stored_words.windows(query_words.len()).any(|window| {
+                            window.iter().zip(query_words.iter()).all(|(s, q)| {
+                                check_levenshtein_match(s, q, params.max_edit, params.prefix_length)
+                            })
+                        })
+                    }
+                    _ => false,
+                }
+            }
+            Match::Fuzzy(MatchFuzzy {
+                fuzzy: crate::types::Fuzzy::TextAny { text_any, params },
+            }) => {
+                let params = params.clone().unwrap_or_default();
+                match payload {
+                    Value::String(stored) => {
+                        // For text_any fuzzy: any query word fuzzy-matches any stored word
+                        let query_words: Vec<&str> = text_any.split_whitespace().collect();
+                        stored.split_whitespace().any(|stored_token| {
+                            query_words.iter().any(|query_token| {
+                                check_levenshtein_match(
+                                    stored_token,
+                                    query_token,
+                                    params.max_edit,
+                                    params.prefix_length,
+                                )
+                            })
+                        })
+                    }
+                    _ => false,
+                }
+            }
             Match::Any(MatchAny { any }) => match (payload, any) {
                 (Value::String(stored), AnyVariants::Strings(list)) => {
                     if list.len() < INDEXSET_ITER_THRESHOLD {
@@ -307,6 +372,49 @@ impl ValueChecker for ValuesCount {
     fn check_empty(&self) -> bool {
         self.check_count(0)
     }
+}
+
+fn check_levenshtein_match(token: &str, query: &str, distance: u32, prefix_length: u32) -> bool {
+    let token_chars: Vec<char> = token.chars().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+
+    // Check prefix match
+    if prefix_length > 0 {
+        let prefix_len_usize = prefix_length as usize;
+        if token_chars.len() < prefix_len_usize
+            || query_chars.len() < prefix_len_usize
+            || token_chars[..prefix_len_usize] != query_chars[..prefix_len_usize]
+        {
+            return false;
+        }
+    }
+
+    levenshtein_distance(&token_chars, &query_chars) <= distance
+}
+
+fn levenshtein_distance(a: &[char], b: &[char]) -> u32 {
+    let m = a.len();
+    let n = b.len();
+
+    if m == 0 {
+        return n as u32;
+    }
+    if n == 0 {
+        return m as u32;
+    }
+
+    let mut prev = (0..=n as u32).collect::<Vec<u32>>();
+    let mut curr = vec![0u32; n + 1];
+
+    for i in 1..=m {
+        curr[0] = i as u32;
+        for j in 1..=n {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            curr[j] = (prev[j] + 1).min(curr[j - 1] + 1).min(prev[j - 1] + cost);
+        }
+        prev.clone_from(&curr);
+    }
+    prev[n]
 }
 
 #[cfg(test)]

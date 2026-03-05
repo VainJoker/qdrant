@@ -36,6 +36,7 @@ impl FromPyObject<'_, '_> for PyMatch {
                 Match::Phrase(_) => {}
                 Match::Any(_) => {}
                 Match::Except(_) => {}
+                Match::Fuzzy(_) => {}
             }
         }
 
@@ -65,6 +66,20 @@ impl<'py> IntoPyObject<'py> for PyMatch {
             Match::Phrase(phrase) => PyMatchPhrase(phrase).into_bound_py_any(py),
             Match::Any(any) => PyMatchAny(any).into_bound_py_any(py),
             Match::Except(except) => PyMatchExcept(except).into_bound_py_any(py),
+            Match::Fuzzy(match_fuzzy) => {
+                // Lossy: degrade fuzzy to text/phrase/text_any for Python edge bindings
+                match match_fuzzy {
+                    MatchFuzzy::Text { text, .. } => {
+                        PyMatchText(MatchText { text }).into_bound_py_any(py)
+                    }
+                    MatchFuzzy::Phrase { phrase, .. } => {
+                        PyMatchPhrase(MatchPhrase { phrase }).into_bound_py_any(py)
+                    }
+                    MatchFuzzy::TextAny { text_any, .. } => {
+                        PyMatchTextAny(MatchTextAny { text_any }).into_bound_py_any(py)
+                    }
+                }
+            }
         }
     }
 }
@@ -78,6 +93,24 @@ impl Repr for PyMatch {
             Match::Phrase(phrase) => PyMatchPhrase::wrap_ref(phrase).fmt(f),
             Match::Any(any) => PyMatchAny::wrap_ref(any).fmt(f),
             Match::Except(except) => PyMatchExcept::wrap_ref(except).fmt(f),
+            Match::Fuzzy(match_fuzzy) => {
+                // Lossy repr: display the underlying text
+                match match_fuzzy {
+                    MatchFuzzy::Text { text, .. } => {
+                        PyMatchText::wrap_ref(&MatchText { text: text.clone() }).fmt(f)
+                    }
+                    MatchFuzzy::Phrase { phrase, .. } => PyMatchPhrase::wrap_ref(&MatchPhrase {
+                        phrase: phrase.clone(),
+                    })
+                    .fmt(f),
+                    MatchFuzzy::TextAny { text_any, .. } => {
+                        PyMatchTextAny::wrap_ref(&MatchTextAny {
+                            text_any: text_any.clone(),
+                        })
+                        .fmt(f)
+                    }
+                }
+            }
         }
     }
 }

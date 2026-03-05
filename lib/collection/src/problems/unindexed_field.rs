@@ -235,6 +235,7 @@ fn infer_index_from_field_condition(field_condition: &FieldCondition) -> Vec<Fie
             Match::Any(match_any) => infer_index_from_any_variants(&match_any.any),
             Match::Except(match_except) => infer_index_from_any_variants(&match_except.except),
             Match::TextAny(_match_text_any) => vec![FieldIndexType::Text],
+            Match::Fuzzy(_match_fuzzy) => vec![FieldIndexType::Text],
         })
     }
     if let Some(range_interface) = range {
