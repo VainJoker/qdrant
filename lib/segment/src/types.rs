@@ -2527,7 +2527,7 @@ impl FuzzyParams {
         Ok(FuzzyParams {
             max_edit: self.max_edit,
             prefix_length: self.prefix_length,
-            max_expansions: self.max_expansions.min(Self::MAX_EXPANSIONS_CAP).max(1),
+            max_expansions: self.max_expansions.clamp(1, Self::MAX_EXPANSIONS_CAP),
         })
     }
 }

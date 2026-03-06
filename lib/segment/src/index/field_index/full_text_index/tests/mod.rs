@@ -537,3 +537,310 @@ fn test_fuzzy_phrase_preserves_order() {
     let results: Vec<_> = index.fuzzy_filter_query(query, &hw_counter).collect();
     assert_eq!(results, vec![0]);
 }
+
+/// Integration test covering 3 index types (mutable / immutable / mmap) × 3 query modes
+/// (text, text_any, phrase) with both exact and fuzzy variants.
+#[test]
+fn test_all_index_types_all_query_modes() {
+    let hw = HardwareCounterCell::default();
+
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        min_token_len: None,
+        max_token_len: None,
+        lowercase: Some(true),
+        on_disk: None,
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        stopwords: None,
+        stemmer: None,
+        ascii_folding: None,
+        enable_hnsw: None,
+    };
+
+    // Shared corpus ──────────────────────────────────────────────
+    let docs: Vec<(PointOffsetType, &str)> = vec![
+        (0, "the quick brown fox jumps over the lazy dog"),
+        (1, "brown fox quick the jumps over lazy dog"),
+        (2, "quick brown fox runs fast"),
+        (3, "the lazy dog sleeps peacefully"),
+        (4, "the brown brown fox"),
+        (5, "a completely unrelated sentence about space"),
+        // Added for fuzzy multi-expansion:
+        (6, "put it in the box"),
+        (7, "read a book"),
+        (8, "look back"),
+        // Added for max_expansions:
+        (10, "fuzzytermA"),
+        (11, "fuzzytermB"),
+        (12, "fuzzytermC"),
+        (13, "fuzzytermD"),
+        (14, "fuzzytermE"),
+    ];
+
+    // Helper: build all 3 index variants with the same data ─────
+    let build_indexes = || {
+        let dir_mut = Builder::new().prefix("idx_mut").tempdir().unwrap();
+        let mut mutable =
+            FullTextIndex::new_gridstore(dir_mut.path().to_path_buf(), config.clone(), true)
+                .unwrap()
+                .unwrap();
+        for &(id, text) in &docs {
+            mutable.add_many(id, vec![text.to_string()], &hw).unwrap();
+        }
+
+        let dir_imm = Builder::new().prefix("idx_imm").tempdir().unwrap();
+        let mut imm_builder =
+            FullTextIndex::builder_mmap(dir_imm.path().to_path_buf(), config.clone(), false);
+        imm_builder.init().unwrap();
+        for &(id, text) in &docs {
+            imm_builder
+                .add_many(id, vec![text.to_string()], &hw)
+                .unwrap();
+        }
+        let immutable = imm_builder.finalize().unwrap();
+
+        let dir_mmap = Builder::new().prefix("idx_mmap").tempdir().unwrap();
+        let mut mmap_builder =
+            FullTextIndex::builder_mmap(dir_mmap.path().to_path_buf(), config.clone(), true);
+        mmap_builder.init().unwrap();
+        for &(id, text) in &docs {
+            mmap_builder
+                .add_many(id, vec![text.to_string()], &hw)
+                .unwrap();
+        }
+        let mmap = mmap_builder.finalize().unwrap();
+
+        vec![(mutable, dir_mut), (immutable, dir_imm), (mmap, dir_mmap)]
+    };
+
+    let indexes = build_indexes();
+
+    for (idx, (index, _dir)) in indexes.iter().enumerate() {
+        let label = match idx {
+            0 => "mutable",
+            1 => "immutable",
+            _ => "mmap",
+        };
+
+        {
+            let q = index
+                .parse_text_query("quick brown fox", &hw)
+                .unwrap_or_else(|| panic!("[{label}] text query should parse"));
+
+            // docs 0, 1, 2 contain all three tokens
+            assert!(index.check_match(&q, 0), "[{label}] text match doc 0");
+            assert!(index.check_match(&q, 1), "[{label}] text match doc 1");
+            assert!(index.check_match(&q, 2), "[{label}] text match doc 2");
+            assert!(!index.check_match(&q, 3), "[{label}] text !match doc 3");
+            assert!(!index.check_match(&q, 5), "[{label}] text !match doc 5");
+
+            let hits: Vec<_> = index.filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 3, "[{label}] text filter count");
+        }
+
+        assert!(
+            index.parse_text_query("xyznonexist", &hw).is_none(),
+            "[{label}] text unknown token returns None"
+        );
+
+        {
+            let q = index
+                .parse_text_any_query("fox sleeps xyznonexist", &hw)
+                .unwrap_or_else(|| panic!("[{label}] text_any query should parse"));
+
+            assert!(index.check_match(&q, 0), "[{label}] any match doc 0");
+            assert!(index.check_match(&q, 3), "[{label}] any match doc 3");
+            assert!(!index.check_match(&q, 5), "[{label}] any !match doc 5");
+
+            let hits: Vec<_> = index.filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 5, "[{label}] text_any filter count");
+        }
+
+        {
+            let q = index
+                .parse_phrase_query("quick brown fox", &hw)
+                .unwrap_or_else(|| panic!("[{label}] phrase query should parse"));
+
+            assert!(index.check_match(&q, 0), "[{label}] phrase match doc 0");
+            assert!(index.check_match(&q, 2), "[{label}] phrase match doc 2");
+            assert!(
+                !index.check_match(&q, 1),
+                "[{label}] phrase !match doc 1 (wrong order)"
+            );
+
+            let hits: Vec<_> = index.filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 2, "[{label}] phrase filter count");
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "quik brwn fox".to_string(), // typos in quick & brown
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            let q = index
+                .parse_fuzzy_query(&mf, &hw)
+                .unwrap_or_else(|| panic!("[{label}] fuzzy text should parse"));
+
+            assert!(index.fuzzy_check_match(&q, 0), "[{label}] fuz-text doc 0");
+            assert!(index.fuzzy_check_match(&q, 1), "[{label}] fuz-text doc 1");
+            assert!(index.fuzzy_check_match(&q, 2), "[{label}] fuz-text doc 2");
+            assert!(!index.fuzzy_check_match(&q, 5), "[{label}] fuz-text !doc 5");
+
+            let hits: Vec<_> = index.fuzzy_filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 3, "[{label}] fuzzy text filter count");
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "zzzzz yyyyy".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            assert!(
+                index.parse_fuzzy_query(&mf, &hw).is_none(),
+                "[{label}] fuzzy text no candidates → None"
+            );
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::TextAny {
+                    text_any: "quik zzzzzzz".to_string(), // "quik"→quick, "zzzzzzz"→nothing
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            let q = index
+                .parse_fuzzy_query(&mf, &hw)
+                .unwrap_or_else(|| panic!("[{label}] fuzzy text_any should parse"));
+
+            assert!(index.fuzzy_check_match(&q, 0), "[{label}] fuz-any doc 0");
+            assert!(!index.fuzzy_check_match(&q, 3), "[{label}] fuz-any !doc 3");
+
+            let hits: Vec<_> = index.fuzzy_filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 3, "[{label}] fuzzy text_any filter count");
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::Phrase {
+                    phrase: "quik brwn fox".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            let q = index
+                .parse_fuzzy_query(&mf, &hw)
+                .unwrap_or_else(|| panic!("[{label}] fuzzy phrase should parse"));
+
+            assert!(index.fuzzy_check_match(&q, 0), "[{label}] fuz-phrase doc 0");
+            assert!(index.fuzzy_check_match(&q, 2), "[{label}] fuz-phrase doc 2");
+            assert!(
+                !index.fuzzy_check_match(&q, 1),
+                "[{label}] fuz-phrase !doc 1 (wrong order)"
+            );
+            assert!(
+                !index.fuzzy_check_match(&q, 5),
+                "[{label}] fuz-phrase !doc 5"
+            );
+
+            let hits: Vec<_> = index.fuzzy_filter_query(q, &hw).collect();
+            assert_eq!(hits.len(), 2, "[{label}] fuzzy phrase filter count");
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "bok".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            let q = index
+                .parse_fuzzy_query(&mf, &hw)
+                .unwrap_or_else(|| panic!("[{label}] fuzzy bok should parse"));
+
+            let hits: Vec<_> = index.fuzzy_filter_query(q, &hw).collect();
+            assert!(hits.contains(&6), "[{label}] bok matches box");
+            assert!(hits.contains(&7), "[{label}] bok matches book");
+        }
+
+        {
+            let mf_loose = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "brwn".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 2,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            let q_loose = index.parse_fuzzy_query(&mf_loose, &hw).unwrap();
+            assert!(
+                index.fuzzy_check_match(&q_loose, 0),
+                "[{label}] prefix=2 matches brown"
+            );
+
+            let mf_strict = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "brwn".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 3,
+                        max_expansions: 30,
+                    }),
+                },
+            };
+            if let Some(q_strict) = index.parse_fuzzy_query(&mf_strict, &hw) {
+                assert!(
+                    !index.fuzzy_check_match(&q_strict, 0),
+                    "[{label}] prefix=3 !matches brown"
+                );
+            }
+        }
+
+        {
+            let mf = MatchFuzzy {
+                fuzzy: Fuzzy::Text {
+                    text: "fuzzyterm".to_string(),
+                    params: Some(FuzzyParams {
+                        max_edit: 1,
+                        prefix_length: 0,
+                        max_expansions: 2,
+                    }),
+                },
+            };
+            let q = index.parse_fuzzy_query(&mf, &hw).unwrap();
+
+            let hits: Vec<_> = index.fuzzy_filter_query(q, &hw).collect();
+            assert_eq!(
+                hits.len(),
+                2,
+                "[{label}] max_expansions=2 should limit results"
+            );
+        }
+    }
+}

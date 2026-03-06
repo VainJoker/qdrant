@@ -368,7 +368,7 @@ impl MmapInvertedIndex {
                 for group in groups {
                     for &token_id in group.tokens() {
                         if let Some(view) = postings.get(token_id) {
-                            for elem in view.into_iter() {
+                            for elem in view {
                                 if elem.id == point_id {
                                     all_positions.extend(elem.value.to_token_positions(token_id));
                                 }
