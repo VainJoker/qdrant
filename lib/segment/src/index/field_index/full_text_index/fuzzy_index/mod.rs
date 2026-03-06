@@ -5,19 +5,15 @@ mod mutable_fuzzy_index;
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
-pub use fuzzy_expander::{FuzzyCandidate, FuzzyExpander, PrefixFuzzy};
+pub use fuzzy_expander::{FuzzyCandidate, FuzzyExpander, MutableFuzzyExpander};
 
-use super::inverted_index::{Document, InvertedIndex, TokenSet};
+use super::inverted_index::{Document, InvertedIndex, TokenId, TokenSet};
 use crate::index::field_index::{CardinalityEstimation, PrimaryCondition};
-use crate::types::FieldCondition;
+use crate::types::{FieldCondition, FuzzyParams};
 
-// ────────────────────────────────────────────────────────────────────────────
-// FuzzyDocument
-// ────────────────────────────────────────────────────────────────────────────
-
-/// Contains position-ordered groups of fuzzy-expanded token IDs.
+/// Position-ordered groups of fuzzy-expanded token IDs.
 ///
-/// This is the fuzzy counterpart of [`Document`]: whereas `Document` has exactly
+/// The fuzzy counterpart of [`Document`]: whereas `Document` has exactly
 /// one `TokenId` per position, `FuzzyDocument` has a [`TokenSet`] per position
 /// (the set of all fuzzy-expanded candidates for that position).
 #[derive(Debug, Clone)]
@@ -40,7 +36,7 @@ impl FuzzyDocument {
         &self.0
     }
 
-    pub fn inner(self) -> Vec<TokenSet> {
+    pub fn into_inner(self) -> Vec<TokenSet> {
         self.0
     }
 
@@ -48,19 +44,12 @@ impl FuzzyDocument {
         self.0.iter()
     }
 
-    /// Checks if this fuzzy document matches against an exact [`Document`].
-    ///
-    /// The exact document must contain a contiguous window of `len(groups)` where
-    /// `window[i]` matches at least one token in `groups[i]`.
+    /// Checks if a contiguous window of this document's groups matches the exact [`Document`].
     pub fn matches_document(&self, doc: &Document) -> bool {
         let tokens = doc.tokens();
         let groups = self.groups();
 
-        if tokens.is_empty() || groups.is_empty() {
-            return false;
-        }
-
-        if tokens.len() < groups.len() {
+        if tokens.len() < groups.len() || tokens.is_empty() || groups.is_empty() {
             return false;
         }
 
@@ -73,34 +62,37 @@ impl FuzzyDocument {
     }
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// FuzzyParsedQuery
-// ────────────────────────────────────────────────────────────────────────────
-
 /// Parsed query for fuzzy matching, parallel to [`super::inverted_index::ParsedQuery`].
 #[derive(Debug, Clone)]
 pub enum FuzzyParsedQuery {
-    /// Fuzzy "text" match (AND semantics): for each query token, a set of fuzzy-expanded
-    /// token IDs is provided. Every group must have at least one match in the document.
+    /// AND semantics: every group must have at least one match in the document.
     AllTokens(FuzzyDocument),
 
-    /// Fuzzy "text_any" match (OR semantics): any of these fuzzy-expanded token IDs
-    /// matching the document is sufficient.
+    /// OR semantics: any fuzzy-expanded token matching the document is sufficient.
     AnyTokens(TokenSet),
 
-    /// Fuzzy phrase match: position-ordered groups of fuzzy-expanded token IDs.
-    /// The document must contain a contiguous window where position i matches
-    /// at least one token from groups[i].
+    /// Position-ordered phrase match: the document must contain a contiguous window
+    /// where position *i* matches at least one token from `groups[i]`.
     Phrase(FuzzyDocument),
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// FuzzyIndex trait
-// ────────────────────────────────────────────────────────────────────────────
+/// Common interface for fuzzy term expansion.
+///
+/// [`FuzzyExpander`] (FST-based) is used for immutable/mmap indices;
+/// [`MutableFuzzyExpander`] (BTreeSet-based) is used for mutable indices
+/// to avoid rebuilding an FST on every vocabulary mutation.
+pub trait TermExpander {
+    fn expand_term(
+        &self,
+        term: &str,
+        params: &FuzzyParams,
+        vocab_lookup: &dyn Fn(&str) -> Option<TokenId>,
+    ) -> Vec<FuzzyCandidate>;
+}
 
 /// Trait for fuzzy text matching, parallel to [`InvertedIndex`].
 ///
-/// Each inverted index implementation provides a `FuzzyIndex` impl that handles
+/// Each inverted-index implementation provides a `FuzzyIndex` impl that handles
 /// fuzzy query filtering and matching using the same internal postings data.
 pub trait FuzzyIndex: InvertedIndex {
     fn fuzzy_filter<'a>(
@@ -109,8 +101,7 @@ pub trait FuzzyIndex: InvertedIndex {
         hw_counter: &'a HardwareCounterCell,
     ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a>;
 
-    fn fuzzy_check_match(&self, parsed_query: &FuzzyParsedQuery, point_id: PointOffsetType)
-    -> bool;
+    fn fuzzy_check_match(&self, query: &FuzzyParsedQuery, point_id: PointOffsetType) -> bool;
 
     fn fuzzy_estimate_cardinality(
         &self,
@@ -123,21 +114,21 @@ pub trait FuzzyIndex: InvertedIndex {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
             }
             FuzzyParsedQuery::AllTokens(fuzzy_doc) | FuzzyParsedQuery::Phrase(fuzzy_doc) => {
-                // Estimate as intersection of OR groups: each group is an OR,
-                // then we intersect them. Use the smallest group as baseline.
                 if fuzzy_doc.is_empty() {
                     return CardinalityEstimation::exact(0).with_primary_clause(
                         PrimaryCondition::Condition(Box::new(condition.clone())),
                     );
                 }
-                // Estimate each group's cardinality (as OR/any), then intersect
+
                 let group_estimates: Vec<CardinalityEstimation> = fuzzy_doc
                     .iter()
                     .map(|ts| self.estimate_has_any_cardinality(ts, condition, hw_counter))
                     .collect();
+
                 let min_exp = group_estimates.iter().map(|e| e.exp).min().unwrap_or(0);
                 let min_min = group_estimates.iter().map(|e| e.min).min().unwrap_or(0);
                 let min_max = group_estimates.iter().map(|e| e.max).min().unwrap_or(0);
+
                 CardinalityEstimation {
                     primary_clauses: vec![PrimaryCondition::Condition(Box::new(condition.clone()))],
                     min: 0,
@@ -146,5 +137,55 @@ pub trait FuzzyIndex: InvertedIndex {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_set(ids: &[u32]) -> TokenSet {
+        ids.iter().copied().collect()
+    }
+
+    fn document(ids: &[u32]) -> Document {
+        Document::new(ids.to_vec())
+    }
+
+    #[test]
+    fn test_fuzzy_document_empty() {
+        let doc = FuzzyDocument::new(vec![]);
+        assert!(doc.is_empty());
+        assert_eq!(doc.len(), 0);
+        assert!(doc.groups().is_empty());
+    }
+
+    #[test]
+    fn test_fuzzy_document_matches_document() {
+        let fuzzy = FuzzyDocument::new(vec![token_set(&[1, 2]), token_set(&[3, 4])]);
+
+        assert!(fuzzy.matches_document(&document(&[1, 3])));
+        assert!(fuzzy.matches_document(&document(&[2, 4])));
+        assert!(!fuzzy.matches_document(&document(&[1, 5])));
+        assert!(!fuzzy.matches_document(&document(&[1])));
+        assert!(!fuzzy.matches_document(&document(&[])));
+
+        let empty_fuzzy = FuzzyDocument::new(vec![]);
+        assert!(!empty_fuzzy.matches_document(&document(&[1, 2])));
+    }
+
+    #[test]
+    fn test_fuzzy_document_sliding_window_match() {
+        let fuzzy = FuzzyDocument::new(vec![token_set(&[10]), token_set(&[20])]);
+
+        assert!(fuzzy.matches_document(&document(&[5, 10, 20, 30])));
+        assert!(!fuzzy.matches_document(&document(&[5, 10, 15, 20])));
+    }
+
+    #[test]
+    fn test_fuzzy_document_into_inner() {
+        let doc = FuzzyDocument::new(vec![token_set(&[1, 2]), token_set(&[3])]);
+        let inner = doc.into_inner();
+        assert_eq!(inner.len(), 2);
     }
 }

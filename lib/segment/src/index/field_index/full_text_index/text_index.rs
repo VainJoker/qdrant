@@ -13,7 +13,7 @@ use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::fuzzy_index::{FuzzyDocument, FuzzyIndex, FuzzyParsedQuery};
+use super::fuzzy_index::{FuzzyDocument, FuzzyIndex, FuzzyParsedQuery, TermExpander};
 use super::immutable_text_index::ImmutableFullTextIndex;
 use super::inverted_index::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
@@ -368,11 +368,11 @@ impl FullTextIndex {
         match_fuzzy: &MatchFuzzy,
         hw_counter: &HardwareCounterCell,
     ) -> Option<FuzzyParsedQuery> {
-        let expander = match self {
-            Self::Mutable(index) => index.get_fuzzy_expander(),
-            Self::Immutable(index) => index.get_fuzzy_expander(),
-            Self::Mmap(index) => index.get_fuzzy_expander(),
-        }?;
+        let expander: &dyn TermExpander = match self {
+            Self::Mutable(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
+            Self::Immutable(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
+            Self::Mmap(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
+        };
 
         let vocab_lookup = |term: &str| self.get_token(term, hw_counter);
 

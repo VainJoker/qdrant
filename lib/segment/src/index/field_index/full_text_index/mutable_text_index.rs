@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
@@ -19,7 +18,7 @@ use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDeleteWrapper;
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::ValueIndexer;
-use crate::index::field_index::full_text_index::fuzzy_index::FuzzyExpander;
+use crate::index::field_index::full_text_index::fuzzy_index::MutableFuzzyExpander;
 use crate::index::payload_config::StorageType;
 
 const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
@@ -31,7 +30,7 @@ const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
 
 pub struct MutableFullTextIndex {
     pub(super) inverted_index: MutableInvertedIndex,
-    pub(super) fst_index: OnceLock<Option<FuzzyExpander>>,
+    pub(super) fuzzy_index: Option<MutableFuzzyExpander>,
     pub(super) config: TextIndexParams,
     pub(super) storage: Storage,
     pub(super) tokenizer: Tokenizer,
@@ -71,9 +70,18 @@ impl MutableFullTextIndex {
             Ok((idx, str_tokens))
         });
 
+        let inverted_index = MutableInvertedIndex::build_index(iter, phrase_matching)?;
+        let fuzzy_expander = if config.fuzzy_matching.unwrap_or_default() {
+            Some(MutableFuzzyExpander::from_vocab_keys(
+                inverted_index.vocab.keys(),
+            ))
+        } else {
+            None
+        };
+
         Ok(Some(Self {
-            inverted_index: MutableInvertedIndex::build_index(iter, phrase_matching)?,
-            fst_index: OnceLock::new(),
+            inverted_index,
+            fuzzy_expander,
             config,
             storage: Storage::RocksDb(db_wrapper),
             tokenizer,
@@ -130,22 +138,29 @@ impl MutableFullTextIndex {
                 ))
             })?;
 
+        let inverted_index = builder.build();
+        let fuzzy_expander = if config.fuzzy_matching.unwrap_or_default() {
+            Some(MutableFuzzyExpander::from_vocab_keys(
+                inverted_index.vocab.keys(),
+            ))
+        } else {
+            None
+        };
+
         Ok(Some(Self {
-            inverted_index: builder.build(),
-            fst_index: OnceLock::new(),
+            inverted_index,
+            fuzzy_index: fuzzy_expander,
             config,
             storage: Storage::Gridstore(store),
             tokenizer,
         }))
     }
 
-    pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
+    pub fn get_fuzzy_expander(&self) -> Option<&MutableFuzzyExpander> {
         if !self.config.fuzzy_matching.unwrap_or_default() {
             return None;
         }
-        self.fst_index
-            .get_or_init(|| FuzzyExpander::build(&self.inverted_index.vocab))
-            .as_ref()
+        self.fuzzy_index.as_ref()
     }
 
     #[inline]
@@ -237,7 +252,12 @@ impl MutableFullTextIndex {
 
         let tokens = self.inverted_index.register_tokens(&str_tokens);
 
-        self.fst_index = OnceLock::new();
+        // Incrementally update the BTreeSet-based fuzzy expander with new tokens
+        if let Some(ref mut expander) = self.fuzzy_index {
+            for token in &str_tokens {
+                expander.insert(token.as_ref());
+            }
+        }
 
         let phrase_matching = self.config.phrase_matching.unwrap_or_default();
         if phrase_matching {

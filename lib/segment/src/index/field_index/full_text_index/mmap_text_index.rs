@@ -24,7 +24,7 @@ const FST_FILE: &str = "fst.dat";
 
 pub struct MmapFullTextIndex {
     pub(super) inverted_index: MmapInvertedIndex,
-    pub(super) fst_index: Option<FuzzyExpander>,
+    pub(super) fuzzy_index: Option<FuzzyExpander>,
     pub(super) tokenizer: Tokenizer,
 }
 
@@ -51,7 +51,7 @@ impl MmapFullTextIndex {
         let inverted_index = MmapInvertedIndex::open(path, populate, has_positions)?;
         Ok(inverted_index.map(|inverted_index| Self {
             inverted_index,
-            fst_index,
+            fuzzy_index: fst_index,
             tokenizer,
         }))
     }
@@ -116,7 +116,7 @@ impl MmapFullTextIndex {
     }
 
     pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
-        self.fst_index.as_ref()
+        self.fuzzy_index.as_ref()
     }
 }
 
@@ -248,7 +248,7 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
             .and_then(|b| FuzzyExpander::from_bytes(b.clone()));
         let mmap_index = MmapFullTextIndex {
             inverted_index,
-            fst_index: mmap_fst,
+            fuzzy_index: mmap_fst,
             tokenizer: tokenizer.clone(),
         };
 
@@ -258,7 +258,7 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
             let immutable_fst = fst_bytes.and_then(FuzzyExpander::from_bytes);
             FullTextIndex::Immutable(ImmutableFullTextIndex {
                 inverted_index: immutable,
-                fst_index: immutable_fst,
+                fuzzy_index: immutable_fst,
                 tokenizer,
                 storage: Storage::Mmap(Box::new(mmap_index)),
             })

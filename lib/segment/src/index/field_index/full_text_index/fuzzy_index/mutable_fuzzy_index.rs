@@ -12,15 +12,17 @@ impl FuzzyIndex for MutableInvertedIndex {
     ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
         match query {
             FuzzyParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
+
             FuzzyParsedQuery::AllTokens(fuzzy_doc) => {
-                let mut sorted = fuzzy_doc.inner();
-                if sorted.is_empty() {
+                let mut groups = fuzzy_doc.into_inner();
+                if groups.is_empty() {
                     return Box::new(std::iter::empty());
                 }
-                sorted.sort_by_key(|ts| ts.len());
-                let first = sorted.remove(0);
-                let iter = self.filter_has_any(first).filter(move |&point_id| {
-                    sorted.iter().all(|ts| {
+                groups.sort_by_key(|ts| ts.len());
+                let smallest = groups.remove(0);
+                let remaining = groups;
+                let iter = self.filter_has_any(smallest).filter(move |&point_id| {
+                    remaining.iter().all(|ts| {
                         self.get_tokens(point_id)
                             .map(|doc_tokens| doc_tokens.has_any(ts))
                             .unwrap_or(false)
@@ -28,17 +30,18 @@ impl FuzzyIndex for MutableInvertedIndex {
                 });
                 Box::new(iter)
             }
+
             FuzzyParsedQuery::Phrase(fuzzy_doc) => {
                 if fuzzy_doc.is_empty() {
                     return Box::new(std::iter::empty());
                 }
-                let fuzzy_doc_clone = fuzzy_doc.clone();
-                let mut sorted = fuzzy_doc.inner();
-                sorted.sort_by_key(|ts| ts.len());
-                let first = sorted.remove(0);
-                let remaining = sorted;
+                let fuzzy_doc_for_phrase = fuzzy_doc.clone();
+                let mut groups = fuzzy_doc.into_inner();
+                groups.sort_by_key(|ts| ts.len());
+                let smallest = groups.remove(0);
+                let remaining = groups;
                 let iter = self
-                    .filter_has_any(first)
+                    .filter_has_any(smallest)
                     .filter(move |&point_id| {
                         remaining.iter().all(|ts| {
                             self.get_tokens(point_id)
@@ -48,7 +51,7 @@ impl FuzzyIndex for MutableInvertedIndex {
                     })
                     .filter(move |&point_id| {
                         self.get_document(point_id)
-                            .map(|doc| fuzzy_doc_clone.matches_document(doc))
+                            .map(|doc| fuzzy_doc_for_phrase.matches_document(doc))
                             .unwrap_or(false)
                     });
                 Box::new(iter)
@@ -56,15 +59,11 @@ impl FuzzyIndex for MutableInvertedIndex {
         }
     }
 
-    fn fuzzy_check_match(
-        &self,
-        parsed_query: &FuzzyParsedQuery,
-        point_id: PointOffsetType,
-    ) -> bool {
-        match parsed_query {
-            FuzzyParsedQuery::AnyTokens(query) => self
+    fn fuzzy_check_match(&self, query: &FuzzyParsedQuery, point_id: PointOffsetType) -> bool {
+        match query {
+            FuzzyParsedQuery::AnyTokens(tokens) => self
                 .get_tokens(point_id)
-                .map(|doc| doc.has_any(query))
+                .map(|doc| doc.has_any(tokens))
                 .unwrap_or(false),
             FuzzyParsedQuery::AllTokens(fuzzy_doc) => self
                 .get_tokens(point_id)

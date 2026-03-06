@@ -23,7 +23,7 @@ use crate::index::payload_config::StorageType;
 
 pub struct ImmutableFullTextIndex {
     pub(super) inverted_index: ImmutableInvertedIndex,
-    pub(super) fst_index: Option<FuzzyExpander>,
+    pub(super) fuzzy_index: Option<FuzzyExpander>,
     pub(super) tokenizer: Tokenizer,
     // Backing storage, source of state, persists deletions
     pub(super) storage: Storage,
@@ -84,7 +84,7 @@ impl ImmutableFullTextIndex {
 
         // Reuse the FST from the mmap index if available (already conditional on fuzzy_matching)
         let fst_index = index
-            .fst_index
+            .fuzzy_index
             .as_ref()
             .and_then(|expander| FuzzyExpander::from_bytes(expander.to_bytes().to_vec()));
 
@@ -97,7 +97,7 @@ impl ImmutableFullTextIndex {
             inverted_index,
             storage: Storage::Mmap(Box::new(index)),
             tokenizer,
-            fst_index,
+            fuzzy_index: fst_index,
         }
     }
 
@@ -119,7 +119,7 @@ impl ImmutableFullTextIndex {
     }
 
     pub fn get_fuzzy_expander(&self) -> Option<&FuzzyExpander> {
-        self.fst_index.as_ref()
+        self.fuzzy_index.as_ref()
     }
 
     pub fn wipe(self) -> OperationResult<()> {
