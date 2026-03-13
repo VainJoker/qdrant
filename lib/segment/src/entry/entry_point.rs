@@ -337,6 +337,25 @@ pub trait NonAppendableSegmentEntry: SnapshotEntry {
     fn get_telemetry_data(&self, detail: TelemetryDetail) -> SegmentTelemetry;
 
     fn fill_query_context(&self, query_context: &mut QueryContext);
+
+    /// Expand a fuzzy term using the payload FullTextIndex vocabulary for
+    /// BM25 fuzzy search.
+    ///
+    /// `bind_field`: the payload field whose FullTextIndex (with `fuzzy_matching: true`)
+    /// will be used for expansion.
+    ///
+    /// Returns candidates as `(term, edit_distance)` pairs. Returns an empty
+    /// vec if the field doesn't exist, isn't a text index, or has no fuzzy expander.
+    fn expand_fuzzy_terms(
+        &self,
+        bind_field: &JsonPath,
+        token: &str,
+        params: &crate::types::FuzzyParams,
+        hw_counter: &HardwareCounterCell,
+    ) -> Vec<crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate> {
+        let _ = (bind_field, token, params, hw_counter);
+        Vec::new()
+    }
 }
 
 /// Define mutable operations which can be performed with Segment or Segment-like entity.

@@ -6714,6 +6714,7 @@ dependencies = [
  "macro_rules_attribute",
  "macros",
  "memmap2 0.9.10",
+ "murmur3",
  "ndarray",
  "ndarray-npy",
  "nom 8.0.0",

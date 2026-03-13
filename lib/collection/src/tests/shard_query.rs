@@ -70,6 +70,7 @@ async fn test_shard_query_rrf_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -109,6 +110,7 @@ async fn test_shard_query_rrf_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -159,6 +161,7 @@ async fn test_shard_query_rrf_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -206,6 +209,7 @@ async fn test_shard_query_rrf_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -288,6 +292,7 @@ async fn test_shard_query_vector_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -315,6 +320,7 @@ async fn test_shard_query_vector_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -345,6 +351,7 @@ async fn test_shard_query_vector_rescoring() {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();
@@ -416,6 +423,7 @@ async fn test_shard_query_payload_vector() {
         params: None,
         with_vector: WithVector::Bool(true), // requesting vector
         with_payload: WithPayloadInterface::Bool(true), // requesting payload
+        fuzzy_context: None,
     };
 
     let hw_acc = HwMeasurementAcc::new();

@@ -810,6 +810,7 @@ mod tests {
             limit: 5,
             score_threshold: None,
             offset: 0,
+            fuzzy_context: None,
         };
 
         let batch_request = CoreSearchRequestBatch {

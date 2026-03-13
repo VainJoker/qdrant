@@ -1465,6 +1465,23 @@ pub struct SparseVectorParams {
     /// Default: none
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modifier: Option<Modifier>,
+
+    /// Fuzzy search configuration for BM25 sparse vectors.
+    /// When set, enables fuzzy term expansion using the specified payload field's
+    /// full-text index.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuzzy_config: Option<FuzzySearchConfig>,
+}
+
+/// Configuration that binds a sparse vector to a payload field for fuzzy expansion.
+#[derive(
+    Debug, Hash, Deserialize, Serialize, JsonSchema, Validate, Anonymize, Clone, PartialEq, Eq,
+)]
+#[serde(rename_all = "snake_case")]
+pub struct FuzzySearchConfig {
+    /// Name of the payload field whose full-text index (with `fuzzy_matching: true`)
+    /// will be used for fuzzy term expansion.
+    pub fuzzy_bind_field: String,
 }
 
 impl SparseVectorParams {

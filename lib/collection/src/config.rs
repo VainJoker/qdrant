@@ -510,10 +510,18 @@ impl CollectionParams {
     ) -> CollectionResult<()> {
         for (vector_name, update_params) in update_vectors.0.iter() {
             let sparse_vector_params = self.get_sparse_vector_params_mut(vector_name)?;
-            let SparseVectorParams { index, modifier } = update_params.clone();
+            let SparseVectorParams {
+                index,
+                modifier,
+                fuzzy_config,
+            } = update_params.clone();
 
             if let Some(modifier) = modifier {
                 sparse_vector_params.modifier = Some(modifier);
+            }
+
+            if let Some(fuzzy_config) = fuzzy_config {
+                sparse_vector_params.fuzzy_config = Some(fuzzy_config);
             }
 
             if let Some(index) = index {

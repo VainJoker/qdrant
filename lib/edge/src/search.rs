@@ -56,6 +56,7 @@ impl EdgeShard {
             with_payload,
             with_vector,
             score_threshold,
+            fuzzy_context: _,
         } = search;
 
         let vector_name = query.get_vector_name().to_string();

@@ -343,6 +343,7 @@ impl LocalShard {
                     with_payload: None,
                     with_vector: None,
                     score_threshold: score_threshold.map(OrderedFloat::into_inner),
+                    fuzzy_context: None,
                 };
                 let rescoring_core_search_request = CoreSearchRequestBatch {
                     searches: vec![search_request],

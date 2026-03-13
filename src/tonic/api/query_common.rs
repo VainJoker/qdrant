@@ -104,6 +104,7 @@ pub async fn search(
                 .unwrap_or_default(),
         ),
         score_threshold,
+        fuzzy_context: None,
     };
 
     let toc = toc_provider

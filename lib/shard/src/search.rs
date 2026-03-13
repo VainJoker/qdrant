@@ -2,11 +2,42 @@ use api::rest::SearchRequestInternal;
 use common::types::ScoreType;
 use itertools::Itertools as _;
 use segment::data_types::vectors::{NamedQuery, NamedVectorStruct, VectorInternal};
-use segment::types::{Filter, SearchParams, WithPayloadInterface, WithVector};
+use segment::index::field_index::full_text_index::tokenizers::Stemmer;
+use segment::types::{Filter, FuzzyParams, SearchParams, WithPayloadInterface, WithVector};
 use segment::vector_storage::query::{ContextPair, ContextQuery, DiscoveryQuery, RecoQuery};
 use sparse::common::sparse_vector::validate_sparse_vector_impl;
 
 use crate::query::query_enum::QueryEnum;
+
+/// Context for fuzzy BM25 expansion.
+///
+/// Carries the original query tokens, fuzzy parameters, and the BM25 stemmer
+/// so that the collection-level resolve step can look up fuzzy candidates in the
+/// FullTextIndex, stem expanded terms, and compute correct dim_ids.
+#[derive(Clone, Debug)]
+pub struct FuzzyBm25Context {
+    /// Original un-hashed tokens produced by `Bm25::tokenize()`.
+    pub tokens: Vec<String>,
+    /// Fuzzy expansion parameters (max_edit, prefix_length, max_expansions).
+    pub fuzzy_params: FuzzyParams,
+    /// Optional stemmer from the BM25 model config.
+    /// Expanded FST terms must be stemmed before hashing to dim_ids
+    /// to match the stemmed tokens used during document indexing.
+    pub stemmer: Option<Stemmer>,
+}
+
+impl PartialEq for FuzzyBm25Context {
+    fn eq(&self, other: &Self) -> bool {
+        self.tokens == other.tokens && self.fuzzy_params == other.fuzzy_params
+    }
+}
+
+impl std::hash::Hash for FuzzyBm25Context {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.tokens.hash(state);
+        self.fuzzy_params.hash(state);
+    }
+}
 
 /// DEPRECATED: Search method should be removed and replaced with `ShardQueryRequest`
 #[derive(Clone, Debug, PartialEq)]
@@ -28,6 +59,10 @@ pub struct CoreSearchRequest {
     /// Options for specifying which vectors to include into response. Default is false.
     pub with_vector: Option<WithVector>,
     pub score_threshold: Option<ScoreType>,
+    /// Fuzzy BM25 context for fuzzy term expansion.
+    /// Set by the REST/gRPC handler when `params.fuzzy` is present and the query
+    /// is a BM25 Document query. Consumed (taken) by `resolve_fuzzy_bm25()`.
+    pub fuzzy_context: Option<FuzzyBm25Context>,
 }
 
 impl CoreSearchRequest {
@@ -63,6 +98,7 @@ impl From<SearchRequestInternal> for CoreSearchRequest {
             with_payload,
             with_vector,
             score_threshold,
+            fuzzy_context: None,
         }
     }
 }
@@ -144,6 +180,7 @@ impl TryFrom<api::grpc::qdrant::CoreSearchPoints> for CoreSearchRequest {
                     .unwrap_or_default(),
             ),
             score_threshold: value.score_threshold,
+            fuzzy_context: None,
         })
     }
 }
@@ -210,6 +247,7 @@ impl TryFrom<api::grpc::qdrant::SearchPoints> for CoreSearchRequest {
                 .transpose()?,
             with_vector: with_vectors.map(WithVector::from),
             score_threshold: score_threshold.map(|s| s as ScoreType),
+            fuzzy_context: None,
         })
     }
 }

@@ -868,6 +868,28 @@ impl NonAppendableSegmentEntry for Segment {
             }
         }
     }
+
+    fn expand_fuzzy_terms(
+        &self,
+        bind_field: &crate::json_path::JsonPath,
+        token: &str,
+        params: &crate::types::FuzzyParams,
+        hw_counter: &HardwareCounterCell,
+    ) -> Vec<crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate> {
+        let payload_index = self.payload_index.borrow();
+        let Some(field_indexes) = payload_index.field_indexes.get(bind_field) else {
+            return Vec::new();
+        };
+        for field_index in field_indexes {
+            if let crate::index::field_index::FieldIndex::FullTextIndex(text_index) = field_index {
+                let candidates = text_index.expand_term_for_bm25(token, params, hw_counter);
+                if !candidates.is_empty() {
+                    return candidates;
+                }
+            }
+        }
+        Vec::new()
+    }
 }
 
 impl SegmentEntry for Segment {

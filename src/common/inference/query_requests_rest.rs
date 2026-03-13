@@ -10,9 +10,12 @@ use collection::operations::universal_query::shard_query::{FusionInternal, Sampl
 use ordered_float::OrderedFloat;
 use segment::data_types::order_by::OrderBy;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, MultiDenseVectorInternal, VectorInternal};
+use segment::index::field_index::full_text_index::tokenizers::Stemmer;
+use segment::types::SearchParams;
 use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, RecoQuery,
 };
+use shard::search::FuzzyBm25Context;
 use storage::content_manager::errors::{StorageError, StorageResult};
 
 use crate::common::inference::batch_processing::{
@@ -126,6 +129,16 @@ pub async fn convert_query_request_from_rest(
         .transpose()?
         .unwrap_or_default();
 
+    // Extract fuzzy BM25 context before consuming the query
+    let fuzzy_context = extract_fuzzy_context(&query, &params);
+
+    // Validate fuzzy parameter constraints (§6.4)
+    if let Some(ref search_params) = params
+        && search_params.fuzzy.is_some()
+    {
+        validate_fuzzy_constraints(&query, &prefetch)?;
+    }
+
     let query = query
         .map(|q| convert_query_with_inferred(q, &inferred))
         .transpose()?;
@@ -142,11 +155,113 @@ pub async fn convert_query_request_from_rest(
         with_vector: with_vector.unwrap_or(CollectionQueryRequest::DEFAULT_WITH_VECTOR),
         with_payload: with_payload.unwrap_or(CollectionQueryRequest::DEFAULT_WITH_PAYLOAD),
         lookup_from,
+        fuzzy_context,
     };
     Ok(CollectionQueryRequestWithUsage {
         request: collection_query_request,
         usage,
     })
+}
+
+/// Extract fuzzy BM25 context from the query if fuzzy search is enabled
+/// and the query is a BM25 document.
+fn extract_fuzzy_context(
+    query: &Option<rest::QueryInterface>,
+    params: &Option<SearchParams>,
+) -> Option<FuzzyBm25Context> {
+    let fuzzy_params = params.as_ref()?.fuzzy?;
+
+    let doc = match query.as_ref()? {
+        rest::QueryInterface::Nearest(rest::VectorInput::Document(doc)) => doc,
+        rest::QueryInterface::Query(rest::Query::Nearest(rest::NearestQuery {
+            nearest: rest::VectorInput::Document(doc),
+            ..
+        })) => doc,
+        _ => return None,
+    };
+
+    if !super::local_model::is_local_model(&doc.model) {
+        return None;
+    }
+
+    let options = doc.options.clone().map(|o| o.into_options());
+    let bm25_config = super::inference_input::InferenceInput::parse_bm25_config(options).ok()?;
+
+    // Build the stemmer from BM25 config BEFORE consuming it.
+    // Expanded FST terms must be stemmed with the same stemmer used during indexing
+    // so that dim_ids match (e.g., "insurance" → stem → "insur" → hash).
+    let stemmer = build_bm25_stemmer(&bm25_config.text_preprocessing_config);
+
+    let bm25 = super::bm25::Bm25::new(bm25_config);
+    let tokens: Vec<String> = bm25
+        .tokenize(&doc.text)
+        .into_iter()
+        .map(|t| t.into_owned())
+        .collect();
+
+    Some(FuzzyBm25Context {
+        tokens,
+        fuzzy_params,
+        stemmer,
+    })
+}
+
+/// Build the BM25 stemmer from the text preprocessing config.
+///
+/// This replicates the stemmer construction logic from `Bm25::new()` so that
+/// fuzzy expansion can stem expanded terms before hashing to dim_ids.
+fn build_bm25_stemmer(config: &rest::TextPreprocessingConfig) -> Option<Stemmer> {
+    let language = config.language.as_deref().unwrap_or("english");
+    match &config.stemmer {
+        None => Stemmer::try_default_from_language(language),
+        Some(stemmer_algorithm) => Some(Stemmer::from_algorithm(stemmer_algorithm)),
+    }
+}
+
+/// Validate that fuzzy parameters are not combined with incompatible features.
+///
+/// Returns 400 for:
+/// - Raw sparse vector (indices+values) + fuzzy (original tokens are lost)
+/// - Prefetch + fuzzy (not supported in current version)
+/// - Non-sparse, non-document vector + fuzzy (only applicable to BM25/sparse)
+fn validate_fuzzy_constraints(
+    query: &Option<rest::QueryInterface>,
+    prefetch: &[CollectionPrefetch],
+) -> StorageResult<()> {
+    if !prefetch.is_empty() {
+        return Err(StorageError::bad_request(
+            "Fuzzy search cannot be used with prefetch queries",
+        ));
+    }
+
+    if let Some(q) = query.as_ref() {
+        let is_invalid = match q {
+            // Raw sparse vector + fuzzy → 400
+            rest::QueryInterface::Nearest(rest::VectorInput::SparseVector(_)) => Some(
+                "Fuzzy search cannot be used with raw sparse vectors (indices+values). Use a Document query instead.",
+            ),
+            // Dense/multi-dense + fuzzy → 400
+            rest::QueryInterface::Nearest(
+                rest::VectorInput::DenseVector(_) | rest::VectorInput::MultiDenseVector(_),
+            ) => Some("Fuzzy search is only applicable to BM25/sparse vector queries"),
+            rest::QueryInterface::Query(rest::Query::Nearest(rest::NearestQuery {
+                nearest: rest::VectorInput::SparseVector(_),
+                ..
+            })) => Some(
+                "Fuzzy search cannot be used with raw sparse vectors (indices+values). Use a Document query instead.",
+            ),
+            rest::QueryInterface::Query(rest::Query::Nearest(rest::NearestQuery {
+                nearest: rest::VectorInput::DenseVector(_) | rest::VectorInput::MultiDenseVector(_),
+                ..
+            })) => Some("Fuzzy search is only applicable to BM25/sparse vector queries"),
+            _ => None,
+        };
+        if let Some(msg) = is_invalid {
+            return Err(StorageError::bad_request(msg));
+        }
+    }
+
+    Ok(())
 }
 
 fn convert_vector_input_with_inferred(
@@ -489,5 +604,250 @@ mod tests {
             },
             _ => panic!("Expected nearest query"),
         }
+    }
+
+    // ---------------------------------------------------------------
+    // extract_fuzzy_context tests
+    // ---------------------------------------------------------------
+
+    fn create_bm25_document(text: &str) -> Document {
+        Document {
+            text: text.to_string(),
+            model: "qdrant/bm25".to_string(),
+            options: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_no_params() {
+        // No fuzzy params → None
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Document(
+            create_bm25_document("hello world"),
+        )));
+        let params: Option<SearchParams> = None;
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_no_query() {
+        // Have fuzzy params but no query → None
+        let query: Option<rest::QueryInterface> = None;
+        let params = Some(SearchParams {
+            fuzzy: Some(segment::types::FuzzyParams {
+                max_edit: 1,
+                prefix_length: 0,
+                max_expansions: 30,
+            }),
+            ..Default::default()
+        });
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_with_bm25_document_direct() {
+        // Direct VectorInput::Document with BM25 model → should extract tokens
+        let doc = create_bm25_document("hello world fuzzy test");
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Document(
+            doc,
+        )));
+        let fuzzy_params = segment::types::FuzzyParams {
+            max_edit: 1,
+            prefix_length: 0,
+            max_expansions: 30,
+        };
+        let params = Some(SearchParams {
+            fuzzy: Some(fuzzy_params),
+            ..Default::default()
+        });
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_some());
+        let ctx = result.unwrap();
+        assert!(!ctx.tokens.is_empty());
+        assert_eq!(ctx.fuzzy_params, fuzzy_params);
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_with_bm25_document_nested() {
+        // Nested Query::Nearest(NearestQuery { nearest: Document }) → should extract tokens
+        let doc = create_bm25_document("the quick brown fox");
+        let query = Some(rest::QueryInterface::Query(rest::Query::Nearest(
+            NearestQuery {
+                nearest: rest::VectorInput::Document(doc),
+                mmr: None,
+            },
+        )));
+        let fuzzy_params = segment::types::FuzzyParams {
+            max_edit: 2,
+            prefix_length: 1,
+            max_expansions: 10,
+        };
+        let params = Some(SearchParams {
+            fuzzy: Some(fuzzy_params),
+            ..Default::default()
+        });
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_some());
+        let ctx = result.unwrap();
+        assert!(!ctx.tokens.is_empty());
+        assert_eq!(ctx.fuzzy_params, fuzzy_params);
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_with_dense_vector() {
+        // Dense vector + fuzzy → None (not a Document)
+        let query = Some(rest::QueryInterface::Nearest(
+            rest::VectorInput::DenseVector(vec![1.0, 2.0, 3.0]),
+        ));
+        let params = Some(SearchParams {
+            fuzzy: Some(segment::types::FuzzyParams {
+                max_edit: 1,
+                prefix_length: 0,
+                max_expansions: 30,
+            }),
+            ..Default::default()
+        });
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_fuzzy_context_non_local_model() {
+        // Non-local model (not "qdrant/bm25" or "bm25") → None
+        let doc = Document {
+            text: "hello world".to_string(),
+            model: "openai/text-embedding-3-small".to_string(),
+            options: Default::default(),
+        };
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Document(
+            doc,
+        )));
+        let params = Some(SearchParams {
+            fuzzy: Some(segment::types::FuzzyParams {
+                max_edit: 1,
+                prefix_length: 0,
+                max_expansions: 30,
+            }),
+            ..Default::default()
+        });
+        let result = extract_fuzzy_context(&query, &params);
+        assert!(result.is_none());
+    }
+
+    // ---------------------------------------------------------------
+    // validate_fuzzy_constraints tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_validate_fuzzy_constraints_prefetch_error() {
+        // Fuzzy + prefetch → 400
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Document(
+            create_bm25_document("test"),
+        )));
+        let prefetch = vec![CollectionPrefetch {
+            prefetch: vec![],
+            query: None,
+            using: String::new(),
+            filter: None,
+            score_threshold: None,
+            limit: 10,
+            params: None,
+            lookup_from: None,
+        }];
+        let result = validate_fuzzy_constraints(&query, &prefetch);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("prefetch"));
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_raw_sparse_error() {
+        // Raw sparse vector + fuzzy → 400
+        // Use JSON deserialization since `sparse` crate is not a direct dependency
+        let sparse_input: rest::VectorInput = serde_json::from_value(json!({
+            "indices": [1, 2],
+            "values": [1.0, 0.5]
+        }))
+        .unwrap();
+        let query = Some(rest::QueryInterface::Nearest(sparse_input));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("raw sparse vectors"),
+        );
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_dense_error() {
+        // Dense vector + fuzzy → 400
+        let query = Some(rest::QueryInterface::Nearest(
+            rest::VectorInput::DenseVector(vec![1.0, 2.0]),
+        ));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("BM25/sparse vector"),
+        );
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_multi_dense_error() {
+        // Multi-dense vector + fuzzy → 400
+        let query = Some(rest::QueryInterface::Nearest(
+            rest::VectorInput::MultiDenseVector(vec![vec![1.0, 2.0]]),
+        ));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_nested_sparse_error() {
+        // Nested Query::Nearest with raw sparse → 400
+        let sparse_input: rest::VectorInput = serde_json::from_value(json!({
+            "indices": [1],
+            "values": [1.0]
+        }))
+        .unwrap();
+        let query = Some(rest::QueryInterface::Query(rest::Query::Nearest(
+            NearestQuery {
+                nearest: sparse_input,
+                mmr: None,
+            },
+        )));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_document_ok() {
+        // Document query + fuzzy → OK
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Document(
+            create_bm25_document("test"),
+        )));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_no_query_ok() {
+        // No query + empty prefetch → OK
+        let result = validate_fuzzy_constraints(&None, &[]);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_fuzzy_constraints_id_query_ok() {
+        // ID query + fuzzy → OK (not a vector type we restrict)
+        let query = Some(rest::QueryInterface::Nearest(rest::VectorInput::Id(
+            1.into(),
+        )));
+        let result = validate_fuzzy_constraints(&query, &[]);
+        assert!(result.is_ok());
     }
 }

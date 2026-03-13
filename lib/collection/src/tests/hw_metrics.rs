@@ -73,6 +73,7 @@ async fn test_hw_metrics_cancellation() {
             with_payload: None,
             with_vector: None,
             score_threshold: None,
+            fuzzy_context: None,
         }],
     };
 

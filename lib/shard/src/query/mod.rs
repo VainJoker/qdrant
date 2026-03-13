@@ -1,4 +1,5 @@
 pub mod formula;
+pub mod fuzzy_resolve;
 pub mod mmr;
 pub mod planned_query;
 pub mod query_enum;
@@ -52,6 +53,9 @@ pub struct ShardQueryRequest {
     pub params: Option<SearchParams>,
     pub with_vector: WithVector,
     pub with_payload: WithPayloadInterface,
+    /// Fuzzy BM25 context for fuzzy term expansion (transient, not serialized).
+    #[serde(skip)]
+    pub fuzzy_context: Option<crate::search::FuzzyBm25Context>,
 }
 
 impl ShardQueryRequest {
@@ -210,6 +214,7 @@ impl From<CoreSearchRequest> for ShardQueryRequest {
             params,
             with_vector,
             with_payload,
+            fuzzy_context,
         } = value;
 
         Self {
@@ -222,6 +227,7 @@ impl From<CoreSearchRequest> for ShardQueryRequest {
             params,
             with_vector: with_vector.unwrap_or_default(),
             with_payload: with_payload.unwrap_or_default(),
+            fuzzy_context,
         }
     }
 }
@@ -251,6 +257,7 @@ impl From<rest::schema::SearchRequestInternal> for ShardQueryRequest {
             params,
             with_vector: with_vector.unwrap_or_default(),
             with_payload: with_payload.unwrap_or_default(),
+            fuzzy_context: None,
         }
     }
 }
@@ -292,6 +299,7 @@ impl TryFrom<grpc::QueryShardPoints> for ShardQueryRequest {
                 .map(WithPayloadInterface::try_from)
                 .transpose()?
                 .unwrap_or(WithPayloadInterface::Bool(true)),
+            fuzzy_context: None,
         };
 
         Ok(request)
@@ -310,6 +318,7 @@ impl From<ShardQueryRequest> for grpc::QueryShardPoints {
             params,
             with_vector,
             with_payload,
+            fuzzy_context: _,
         } = value;
 
         Self {

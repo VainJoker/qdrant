@@ -12,10 +12,12 @@ use collection::operations::universal_query::shard_query::{FusionInternal, Sampl
 use ordered_float::OrderedFloat;
 use segment::data_types::order_by::OrderBy;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, MultiDenseVectorInternal, VectorInternal};
+use segment::index::field_index::full_text_index::tokenizers::Stemmer;
 use segment::types::{Filter, PointIdType, SearchParams};
 use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, RecoQuery,
 };
+use shard::search::FuzzyBm25Context;
 use tonic::Status;
 
 use crate::common::inference::batch_processing_grpc::{
@@ -146,6 +148,15 @@ pub async fn convert_query_points_from_grpc(
             .await
             .map_err(|e| Status::internal(format!("Inference error: {e}")))?;
 
+    let fuzzy_context = extract_fuzzy_context_grpc(&query, &params);
+
+    // Validate fuzzy parameter constraints (§6.4)
+    if let Some(ref p) = params
+        && p.fuzzy.is_some()
+    {
+        validate_fuzzy_constraints_grpc(&query, &prefetch)?;
+    }
+
     let prefetch = prefetch
         .into_iter()
         .map(|p| convert_prefetch_with_inferred(p, &inferred))
@@ -177,9 +188,108 @@ pub async fn convert_query_points_from_grpc(
                 .transpose()?
                 .unwrap_or(CollectionQueryRequest::DEFAULT_WITH_PAYLOAD),
             lookup_from: lookup_from.map(LookupLocation::try_from).transpose()?,
+            fuzzy_context,
         },
         usage.unwrap_or_default().into(),
     ))
+}
+
+/// Extract fuzzy BM25 context from the gRPC query if fuzzy search is enabled
+/// and the query is a BM25 document.
+fn extract_fuzzy_context_grpc(
+    query: &Option<grpc::Query>,
+    params: &Option<grpc::SearchParams>,
+) -> Option<FuzzyBm25Context> {
+    // Check if fuzzy params are set
+    let fuzzy_grpc = params.as_ref()?.fuzzy.as_ref()?;
+
+    let fuzzy_params = segment::types::FuzzyParams {
+        max_edit: fuzzy_grpc.max_edit.unwrap_or(1),
+        prefix_length: fuzzy_grpc.prefix_length.unwrap_or(0),
+        max_expansions: fuzzy_grpc.max_expansions.unwrap_or(30),
+    };
+
+    // Extract document from the query
+    let variant = query.as_ref()?.variant.as_ref()?;
+    let doc = match variant {
+        Variant::Nearest(vector_input) => match vector_input.variant.as_ref()? {
+            api::grpc::qdrant::vector_input::Variant::Document(doc) => doc,
+            _ => return None,
+        },
+        _ => return None,
+    };
+
+    // Check if it's a local BM25 model
+    if !super::local_model::is_local_model(&doc.model) {
+        return None;
+    }
+
+    // Convert gRPC Document to REST Document for option parsing
+    let rest_doc: rest::Document = doc.clone().try_into().ok()?;
+    let options = rest_doc.options.map(|o| o.into_options());
+    let bm25_config = super::inference_input::InferenceInput::parse_bm25_config(options).ok()?;
+
+    // Build the stemmer from BM25 config BEFORE consuming it.
+    let stemmer = build_bm25_stemmer_grpc(&bm25_config.text_preprocessing_config);
+
+    let bm25 = super::bm25::Bm25::new(bm25_config);
+    let tokens: Vec<String> = bm25
+        .tokenize(&doc.text)
+        .into_iter()
+        .map(|t| t.into_owned())
+        .collect();
+
+    Some(FuzzyBm25Context {
+        tokens,
+        fuzzy_params,
+        stemmer,
+    })
+}
+
+/// Build the BM25 stemmer from the text preprocessing config.
+fn build_bm25_stemmer_grpc(config: &rest::TextPreprocessingConfig) -> Option<Stemmer> {
+    let language = config.language.as_deref().unwrap_or("english");
+    match &config.stemmer {
+        None => Stemmer::try_default_from_language(language),
+        Some(stemmer_algorithm) => Some(Stemmer::from_algorithm(stemmer_algorithm)),
+    }
+}
+
+/// Validate that fuzzy parameters are not combined with incompatible features (gRPC).
+fn validate_fuzzy_constraints_grpc(
+    query: &Option<grpc::Query>,
+    prefetch: &[grpc::PrefetchQuery],
+) -> Result<(), Status> {
+    if !prefetch.is_empty() {
+        return Err(Status::invalid_argument(
+            "Fuzzy search cannot be used with prefetch queries",
+        ));
+    }
+
+    if let Some(q) = query.as_ref()
+        && let Some(Variant::Nearest(vector_input)) = &q.variant
+        && let Some(ref v) = vector_input.variant
+    {
+        match v {
+            api::grpc::qdrant::vector_input::Variant::Sparse(_) => {
+                return Err(Status::invalid_argument(
+                    "Fuzzy search cannot be used with raw sparse vectors (indices+values). Use a Document query instead.",
+                ));
+            }
+            api::grpc::qdrant::vector_input::Variant::Dense(_)
+            | api::grpc::qdrant::vector_input::Variant::MultiDense(_) => {
+                return Err(Status::invalid_argument(
+                    "Fuzzy search is only applicable to BM25/sparse vector queries",
+                ));
+            }
+            api::grpc::qdrant::vector_input::Variant::Document(_)
+            | api::grpc::qdrant::vector_input::Variant::Image(_)
+            | api::grpc::qdrant::vector_input::Variant::Object(_)
+            | api::grpc::qdrant::vector_input::Variant::Id(_) => {}
+        }
+    }
+
+    Ok(())
 }
 
 fn convert_prefetch_with_inferred(

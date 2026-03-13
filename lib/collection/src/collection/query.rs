@@ -364,6 +364,7 @@ impl Collection {
             params: _,
             with_vector,
             with_payload: _,
+            fuzzy_context: _,
         } = request;
 
         let result = match query.as_ref() {

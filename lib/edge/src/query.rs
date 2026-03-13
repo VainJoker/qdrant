@@ -239,6 +239,7 @@ impl EdgeShard {
                     with_payload: None,
                     with_vector: None,
                     score_threshold: score_threshold.map(OrderedFloat::into_inner),
+                    fuzzy_context: None,
                 };
 
                 self.search(search_request)

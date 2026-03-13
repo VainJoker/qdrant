@@ -801,13 +801,19 @@ impl TryFrom<api::grpc::qdrant::SparseVectorParams> for SparseVectorParams {
                     // XXX: Invalid values silently converted to None
                     api::grpc::qdrant::Modifier::try_from(x).ok())
                 .map(Modifier::from),
+            // Fuzzy config is not supported via gRPC yet; use REST to configure.
+            fuzzy_config: None,
         })
     }
 }
 
 impl From<SparseVectorParams> for api::grpc::qdrant::SparseVectorParams {
     fn from(sparse_vector_params: SparseVectorParams) -> Self {
-        let SparseVectorParams { index, modifier } = sparse_vector_params;
+        let SparseVectorParams {
+            index,
+            modifier,
+            fuzzy_config: _,
+        } = sparse_vector_params;
         Self {
             index: index.map(|index_config| {
                 let SparseIndexParams {
@@ -1049,6 +1055,7 @@ impl<'a> From<CollectionCoreSearchRequest<'a>> for api::grpc::qdrant::CoreSearch
             params,
             score_threshold,
             offset,
+            fuzzy_context: _,
         } = request;
         Self {
             collection_name: collection_id,

@@ -60,6 +60,7 @@ impl PyQueryRequest {
             filter: filter.map(Filter::from),
             score_threshold: score_threshold.map(OrderedFloat),
             params: params.map(SearchParams::from),
+            fuzzy_context: None,
         })
     }
 

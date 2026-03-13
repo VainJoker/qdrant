@@ -119,6 +119,7 @@ fn discovery_into_core_search(
         with_payload: request.with_payload,
         with_vector: request.with_vector,
         score_threshold: None,
+        fuzzy_context: None,
     };
 
     Ok(core_search)

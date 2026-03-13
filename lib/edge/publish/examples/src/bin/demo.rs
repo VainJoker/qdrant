@@ -63,6 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         params: None,
         with_vector: WithVector::Bool(false),
         with_payload: WithPayloadInterface::Bool(false),
+        fuzzy_context: None,
     })?;
 
     for p in &results {

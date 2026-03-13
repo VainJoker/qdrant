@@ -46,17 +46,17 @@ use crate::grpc::qdrant::point_id::PointIdOptions;
 use crate::grpc::qdrant::with_payload_selector::SelectorOptions;
 use crate::grpc::qdrant::{
     AcornSearchParams, CollectionDescription, CollectionOperationResponse, Condition, Distance,
-    FieldCondition, Filter, GeoBoundingBox, GeoPoint, GeoPolygon, GeoRadius, HasIdCondition,
-    HealthCheckReply, HnswConfigDiff, IntegerIndexParams, IsEmptyCondition, IsNullCondition,
-    ListCollectionsResponse, ListShardKeysResponse, Match, MinShould, NamedVectors,
-    NestedCondition, PayloadExcludeSelector, PayloadIncludeSelector, PayloadIndexParams,
-    PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct, PointsOperationResponse,
-    PointsOperationResponseInternal, ProductQuantization, QuantizationConfig,
-    QuantizationSearchParams, QuantizationType, RepeatedIntegers, RepeatedStrings,
-    ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription, StopwordsSet,
-    StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult, UpdateResultInternal,
-    ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector, shard_key,
-    with_vectors_selector,
+    FieldCondition, Filter, FuzzySearchParams, GeoBoundingBox, GeoPoint, GeoPolygon, GeoRadius,
+    HasIdCondition, HealthCheckReply, HnswConfigDiff, IntegerIndexParams, IsEmptyCondition,
+    IsNullCondition, ListCollectionsResponse, ListShardKeysResponse, Match, MinShould,
+    NamedVectors, NestedCondition, PayloadExcludeSelector, PayloadIncludeSelector,
+    PayloadIndexParams, PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct,
+    PointsOperationResponse, PointsOperationResponseInternal, ProductQuantization,
+    QuantizationConfig, QuantizationSearchParams, QuantizationType, RepeatedIntegers,
+    RepeatedStrings, ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription,
+    StopwordsSet, StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult,
+    UpdateResultInternal, ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector,
+    shard_key, with_vectors_selector,
 };
 use crate::grpc::{
     self, BinaryQuantizationEncoding, BinaryQuantizationQueryEncoding, DecayParamsExpression,
@@ -921,6 +921,7 @@ impl From<SearchParams> for segment::types::SearchParams {
             quantization,
             indexed_only,
             acorn,
+            fuzzy,
         } = params;
         Self {
             hnsw_ef: hnsw_ef.map(|x| x as usize),
@@ -928,6 +929,11 @@ impl From<SearchParams> for segment::types::SearchParams {
             quantization: quantization.map(|q| q.into()),
             indexed_only: indexed_only.unwrap_or(false),
             acorn: acorn.map(segment::types::AcornSearchParams::from),
+            fuzzy: fuzzy.map(|f| segment::types::FuzzyParams {
+                max_edit: f.max_edit.unwrap_or(1),
+                prefix_length: f.prefix_length.unwrap_or(0),
+                max_expansions: f.max_expansions.unwrap_or(30),
+            }),
         }
     }
 }
@@ -940,6 +946,7 @@ impl From<segment::types::SearchParams> for SearchParams {
             quantization,
             indexed_only,
             acorn,
+            fuzzy,
         } = params;
         Self {
             hnsw_ef: hnsw_ef.map(|x| x as u64),
@@ -947,6 +954,11 @@ impl From<segment::types::SearchParams> for SearchParams {
             quantization: quantization.map(|q| q.into()),
             indexed_only: Some(indexed_only),
             acorn: acorn.map(AcornSearchParams::from),
+            fuzzy: fuzzy.map(|f| FuzzySearchParams {
+                max_edit: Some(f.max_edit),
+                prefix_length: Some(f.prefix_length),
+                max_expansions: Some(f.max_expansions),
+            }),
         }
     }
 }

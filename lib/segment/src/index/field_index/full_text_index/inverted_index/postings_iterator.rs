@@ -210,10 +210,10 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
     for token_id in unique_tokens {
         if let Some(posting) = token_to_posting(&token_id) {
             let mut iter = posting.into_iter();
-            if let Some(elem) = iter.advance_until_greater_or_equal(point_id) {
-                if elem.id == point_id {
-                    tokens_positions.extend(elem.value.to_token_positions(token_id));
-                }
+            if let Some(elem) = iter.advance_until_greater_or_equal(point_id)
+                && elem.id == point_id
+            {
+                tokens_positions.extend(elem.value.to_token_positions(token_id));
             }
         }
     }

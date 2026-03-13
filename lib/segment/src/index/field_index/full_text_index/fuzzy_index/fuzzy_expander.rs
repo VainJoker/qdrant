@@ -14,6 +14,8 @@ use crate::types::FuzzyParams;
 pub struct FuzzyCandidate {
     pub term: String,
     pub token_id: TokenId,
+    /// Levenshtein edit distance between the query term and the matched dictionary term.
+    pub edit_distance: u32,
 }
 
 pub struct PrefixLevenshtein {
@@ -135,12 +137,12 @@ impl TermDictionary for Set<Vec<u8>> {
 
         if use_prefix_automaton {
             match PrefixLevenshtein::new(term, prefix_len, max_distance) {
-                Some(automaton) => search_fst(self, automaton, "", vocab_lookup, limit),
+                Some(automaton) => search_fst(self, automaton, "", term, vocab_lookup, limit),
                 None => Vec::new(),
             }
         } else {
             match Levenshtein::new(term, max_distance) {
-                Ok(automaton) => search_fst(self, automaton, prefix, vocab_lookup, limit),
+                Ok(automaton) => search_fst(self, automaton, prefix, term, vocab_lookup, limit),
                 Err(_) => Vec::new(),
             }
         }
@@ -151,6 +153,7 @@ fn search_fst<A>(
     fst_set: &Set<Vec<u8>>,
     automaton: A,
     required_prefix: &str,
+    query_term: &str,
     vocab_lookup: &dyn Fn(&str) -> Option<TokenId>,
     limit: usize,
 ) -> Vec<FuzzyCandidate>
@@ -161,16 +164,20 @@ where
     let mut results = Vec::with_capacity(limit.min(32));
 
     while let Some(key) = stream.next() {
-        let Ok(matched_term) = str::from_utf8(key) else { continue };
+        let Ok(matched_term) = str::from_utf8(key) else {
+            continue;
+        };
 
         if !required_prefix.is_empty() && !matched_term.starts_with(required_prefix) {
             continue;
         }
 
         if let Some(token_id) = vocab_lookup(matched_term) {
+            let edit_distance = levenshtein_distance(query_term, matched_term);
             results.push(FuzzyCandidate {
                 term: matched_term.to_string(),
                 token_id,
+                edit_distance,
             });
             if results.len() >= limit {
                 break;
@@ -255,7 +262,7 @@ impl TermDictionary for BTreeSet<String> {
                 continue;
             }
 
-            let dist = levenshtein_distance(term.as_bytes(), candidate_term.as_bytes());
+            let dist = levenshtein_distance(term, candidate_term);
             if dist > max_distance {
                 continue;
             }
@@ -264,6 +271,7 @@ impl TermDictionary for BTreeSet<String> {
                 results.push(FuzzyCandidate {
                     term: candidate_term.clone(),
                     token_id,
+                    edit_distance: dist,
                 });
                 if results.len() >= limit {
                     break;
@@ -328,6 +336,7 @@ impl<T: TermDictionary> TermExpander for FuzzyExpander<T> {
                     vec![FuzzyCandidate {
                         term: term.to_string(),
                         token_id,
+                        edit_distance: 0,
                     }]
                 })
                 .unwrap_or_default();
@@ -335,7 +344,9 @@ impl<T: TermDictionary> TermExpander for FuzzyExpander<T> {
 
         let max_distance = params.max_edit.min(FuzzyParams::MAX_EDIT_DISTANCE);
         let prefix_len = params.prefix_length as usize;
-        let max_expansions = params.max_expansions.clamp(1, FuzzyParams::MAX_EXPANSIONS_CAP) as usize;
+        let max_expansions = params
+            .max_expansions
+            .clamp(1, FuzzyParams::MAX_EXPANSIONS_CAP) as usize;
 
         let mut candidates = Vec::with_capacity(max_expansions.min(64));
         let mut seen_ids = std::collections::HashSet::new();
@@ -383,10 +394,13 @@ fn prefix_successor(prefix: &str) -> Option<String> {
     None
 }
 
-/// Compute Levenshtein edit distance between two byte slices using the Wagner–Fischer algorithm.
-fn levenshtein_distance(a: &[u8], b: &[u8]) -> u32 {
-    let m = a.len();
-    let n = b.len();
+/// Compute Levenshtein edit distance between two strings at the character level
+/// using the Wagner–Fischer algorithm.
+pub fn levenshtein_distance(a: &str, b: &str) -> u32 {
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let m = a_chars.len();
+    let n = b_chars.len();
 
     // Optimization: early return on trivial cases
     if m == 0 {
@@ -403,7 +417,11 @@ fn levenshtein_distance(a: &[u8], b: &[u8]) -> u32 {
     for i in 1..=m {
         curr[0] = i as u32;
         for j in 1..=n {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let cost = if a_chars[i - 1] == b_chars[j - 1] {
+                0
+            } else {
+                1
+            };
             curr[j] = (prev[j] + 1) // deletion
                 .min(curr[j - 1] + 1) // insertion
                 .min(prev[j - 1] + cost); // substitution
@@ -533,11 +551,11 @@ mod tests {
 
     #[test]
     fn levenshtein_edits() {
-        assert_eq!(levenshtein_distance(b"hello", b"hallo"), 1);
-        assert_eq!(levenshtein_distance(b"hello", b"hell"), 1);
-        assert_eq!(levenshtein_distance(b"hello", b"hellos"), 1);
-        assert_eq!(levenshtein_distance(b"kitten", b"sitting"), 3);
-        assert_eq!(levenshtein_distance(b"flaw", b"lawn"), 2);
+        assert_eq!(levenshtein_distance("hello", "hallo"), 1);
+        assert_eq!(levenshtein_distance("hello", "hell"), 1);
+        assert_eq!(levenshtein_distance("hello", "hellos"), 1);
+        assert_eq!(levenshtein_distance("kitten", "sitting"), 3);
+        assert_eq!(levenshtein_distance("flaw", "lawn"), 2);
     }
 
     #[test]

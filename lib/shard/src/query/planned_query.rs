@@ -7,7 +7,7 @@ use segment::types::{Filter, SearchParams, WithPayloadInterface, WithVector};
 use super::query_enum::QueryEnum;
 use super::scroll::{QueryScrollRequestInternal, ScrollOrder};
 use super::*;
-use crate::search::CoreSearchRequest;
+use crate::search::{CoreSearchRequest, FuzzyBm25Context};
 
 const MAX_PREFETCH_DEPTH: usize = 64;
 
@@ -125,6 +125,7 @@ impl PlannedQuery {
             with_vector,
             with_payload,
             params,
+            fuzzy_context,
         } = request;
 
         // Adjust limit so that we have enough results when we cut off the offset at a higher level
@@ -150,6 +151,7 @@ impl PlannedQuery {
                 with_payload,
                 params,
                 limit,
+                fuzzy_context,
             )?
         } else {
             self.root_plan_with_prefetches(
@@ -179,6 +181,7 @@ impl PlannedQuery {
         with_payload: WithPayloadInterface,
         params: Option<SearchParams>,
         limit: usize,
+        fuzzy_context: Option<FuzzyBm25Context>,
     ) -> OperationResult<RootPlan> {
         let rescore_stages = match &query {
             None => None,
@@ -204,6 +207,7 @@ impl PlannedQuery {
             params,
             score_threshold,
             filter,
+            fuzzy_context,
         )?];
 
         // Root-level query without prefetches means we won't do any extra rescoring
@@ -332,6 +336,7 @@ fn recurse_prefetches(
                 params,
                 score_threshold.map(OrderedFloat::into_inner),
                 filter,
+                None, // fuzzy not supported with prefetch (validated upstream)
             )?
         } else {
             // This has nested prefetches. Recurse into them
@@ -375,6 +380,7 @@ fn leaf_source_from_scoring_query(
     params: Option<SearchParams>,
     score_threshold: Option<f32>,
     filter: Option<Filter>,
+    fuzzy_context: Option<FuzzyBm25Context>,
 ) -> OperationResult<Source> {
     let source = match query {
         Some(ScoringQuery::Vector(query_enum)) => {
@@ -387,6 +393,7 @@ fn leaf_source_from_scoring_query(
                 with_vector: Some(WithVector::from(false)),
                 with_payload: Some(WithPayloadInterface::from(false)),
                 score_threshold,
+                fuzzy_context,
             };
 
             let idx = core_searches.len();
@@ -449,6 +456,7 @@ fn leaf_source_from_scoring_query(
                 offset: 0,
                 params,
                 limit: candidates_limit,
+                fuzzy_context: None,
             };
 
             let idx = core_searches.len();

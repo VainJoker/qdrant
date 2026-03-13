@@ -159,6 +159,35 @@ impl FullTextIndex {
         }
     }
 
+    /// Expand a single term using the fuzzy expander for BM25 fuzzy search.
+    ///
+    /// Returns a list of `(term, edit_distance)` candidates from the
+    /// FullTextIndex vocabulary, or an empty vec if fuzzy_matching is not
+    /// enabled or no fuzzy expander is available.
+    pub fn expand_term_for_bm25(
+        &self,
+        term: &str,
+        params: &FuzzyParams,
+        hw_counter: &HardwareCounterCell,
+    ) -> Vec<super::fuzzy_index::FuzzyCandidate> {
+        let expander: &dyn TermExpander = match self {
+            Self::Mutable(index) => match index.get_fuzzy_expander() {
+                Some(e) => e as &dyn TermExpander,
+                None => return Vec::new(),
+            },
+            Self::Immutable(index) => match index.get_fuzzy_expander() {
+                Some(e) => e as &dyn TermExpander,
+                None => return Vec::new(),
+            },
+            Self::Mmap(index) => match index.get_fuzzy_expander() {
+                Some(e) => e as &dyn TermExpander,
+                None => return Vec::new(),
+            },
+        };
+        let vocab_lookup = |t: &str| self.get_token(t, hw_counter);
+        expander.expand_term(term, params, &vocab_lookup)
+    }
+
     pub(super) fn filter_query<'a>(
         &'a self,
         query: ParsedQuery,

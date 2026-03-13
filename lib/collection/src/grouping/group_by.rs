@@ -294,6 +294,7 @@ impl From<CollectionQueryGroupsRequest> for GroupRequest {
             with_vector,
             with_payload,
             lookup_from,
+            fuzzy_context: None,
         };
 
         GroupRequest {

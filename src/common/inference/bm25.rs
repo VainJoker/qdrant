@@ -31,7 +31,7 @@ impl Bm25 {
     }
 
     /// Tokenizes the `input` with the configured tokenizer options.
-    fn tokenize<'b>(&'b self, input: &'b str) -> Vec<Cow<'b, str>> {
+    pub fn tokenize<'b>(&'b self, input: &'b str) -> Vec<Cow<'b, str>> {
         let mut out = vec![];
         self.tokenizer.tokenize_query(input, |i| out.push(i));
         out
@@ -94,8 +94,17 @@ impl Bm25 {
     }
 
     fn compute_token_id(token: &str) -> u32 {
-        (murmur3_32_of_slice(token.as_bytes(), 0) as i32).unsigned_abs()
+        bm25_token_to_dim_id(token)
     }
+}
+
+/// Compute the dimension ID for a BM25 token using murmur3 hash.
+///
+/// This is the same hash used by `Bm25::compute_token_id()`, exposed as a
+/// standalone public function so that fuzzy expansion can convert expanded
+/// dictionary terms into sparse-vector dimension IDs.
+pub fn bm25_token_to_dim_id(token: &str) -> u32 {
+    (murmur3_32_of_slice(token.as_bytes(), 0) as i32).unsigned_abs()
 }
 
 fn new_token_processor_from_config(value: TextPreprocessingConfig) -> TokensProcessor {

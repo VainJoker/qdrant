@@ -607,6 +607,12 @@ pub struct SearchParams {
     #[validate(nested)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acorn: Option<AcornSearchParams>,
+
+    /// Fuzzy BM25 search params. When set, enables fuzzy term expansion for
+    /// BM25 sparse vector queries.
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fuzzy: Option<FuzzyParams>,
 }
 
 /// Configuration for vectors.
@@ -2474,7 +2480,7 @@ pub struct MatchExcept {
 }
 
 /// Parameters for fuzzy (approximate) full-text matching.
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Copy, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub struct FuzzyParams {
     /// Max Levenshtein edit distance (0..=2).

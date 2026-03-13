@@ -185,6 +185,7 @@ impl Collection {
             params: None,
             with_vector: WithVector::Selector(vec![using.clone()]), // retrieve the vector
             with_payload: Default::default(),
+            fuzzy_context: None,
         };
 
         let mut sampled_points = self
@@ -241,6 +242,7 @@ impl Collection {
                 with_vector: WithVector::Bool(false),
                 with_payload: WithPayloadInterface::Bool(false),
                 lookup_from: None,
+                fuzzy_context: None,
             };
 
             queries.push((query_request, shard_selection.clone()));

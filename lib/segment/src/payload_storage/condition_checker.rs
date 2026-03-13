@@ -175,7 +175,7 @@ impl ValueChecker for Match {
             Match::Fuzzy(MatchFuzzy {
                 fuzzy: crate::types::Fuzzy::Text { text, params },
             }) => {
-                let params = params.clone().unwrap_or_default();
+                let params = (*params).unwrap_or_default();
                 match payload {
                     Value::String(stored) => {
                         // Iterate over tokens in the stored string
@@ -194,7 +194,7 @@ impl ValueChecker for Match {
             Match::Fuzzy(MatchFuzzy {
                 fuzzy: crate::types::Fuzzy::Phrase { phrase, params },
             }) => {
-                let params = params.clone().unwrap_or_default();
+                let params = (*params).unwrap_or_default();
                 match payload {
                     Value::String(stored) => {
                         // For phrase fuzzy: each query word must fuzzy-match a stored word,
@@ -218,7 +218,7 @@ impl ValueChecker for Match {
             Match::Fuzzy(MatchFuzzy {
                 fuzzy: crate::types::Fuzzy::TextAny { text_any, params },
             }) => {
-                let params = params.clone().unwrap_or_default();
+                let params = (*params).unwrap_or_default();
                 match payload {
                     Value::String(stored) => {
                         // For text_any fuzzy: any query word fuzzy-matches any stored word

@@ -31,6 +31,7 @@ impl Generalizer for ShardQueryRequest {
             params,
             with_vector,
             with_payload,
+            fuzzy_context: _,
         } = self;
 
         ShardQueryRequest {
@@ -43,6 +44,7 @@ impl Generalizer for ShardQueryRequest {
             params: *params,
             with_vector: with_vector.clone(),
             with_payload: with_payload.clone(),
+            fuzzy_context: None,
         }
     }
 }

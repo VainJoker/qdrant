@@ -44,6 +44,8 @@ pub struct CollectionQueryRequest {
     pub with_vector: WithVector,
     pub with_payload: WithPayloadInterface,
     pub lookup_from: Option<LookupLocation>,
+    /// Fuzzy BM25 context (extracted tokens + params) for fuzzy term expansion.
+    pub fuzzy_context: Option<shard::search::FuzzyBm25Context>,
 }
 
 impl CollectionQueryRequest {
@@ -736,6 +738,7 @@ impl CollectionQueryRequest {
             params: self.params,
             with_vector: self.with_vector,
             with_payload: self.with_payload,
+            fuzzy_context: self.fuzzy_context,
         })
     }
 

@@ -1,3 +1,4 @@
+pub mod bm25_fuzzy_expander;
 pub mod indices_tracker;
 pub mod sparse_index_config;
 pub mod sparse_search_telemetry;

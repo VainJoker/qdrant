@@ -176,6 +176,7 @@ fn batch_search_bench(c: &mut Criterion) {
                             with_payload: WithPayloadInterface::Bool(true),
                             with_vector: WithVector::Bool(false),
                             score_threshold: None,
+                            fuzzy_context: None,
                         };
                         searches.push(search_query);
                     }
@@ -277,6 +278,7 @@ fn batch_rrf_query_bench(c: &mut Criterion) {
                             with_payload: WithPayloadInterface::Bool(true),
                             with_vector: WithVector::Bool(false),
                             score_threshold: None,
+                            fuzzy_context: None,
                         };
                         searches.push(search_query);
                     }
@@ -334,6 +336,7 @@ fn batch_rescore_bench(c: &mut Criterion) {
                             with_payload: WithPayloadInterface::Bool(true),
                             with_vector: WithVector::Bool(false),
                             score_threshold: None,
+                            fuzzy_context: None,
                         };
                         searches.push(search_query);
                     }

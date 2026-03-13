@@ -269,6 +269,7 @@ async fn test_search_dedup() {
                 with_payload: None,
                 with_vector: None,
                 score_threshold: None,
+                fuzzy_context: None,
             },
             None,
             &ShardSelectorInternal::All,

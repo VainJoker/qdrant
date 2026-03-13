@@ -248,6 +248,7 @@ itertools = "0.14.0"
 log = "0.4.29"
 memmap2 = "0.9.10"
 mockito = "1.7"
+murmur3 = { git = "https://github.com/qdrant/murmur3", rev = "2c39087" }
 nix = { version = "0.31", features = ["fs", "feature"] }
 num-traits = "0.2.19"
 ordered-float = { version = "5.1.0", features = ["serde", "schemars"] }
@@ -387,7 +388,7 @@ opt-level = 3
 codegen-units = 256  # restore default value for faster compilation
 
 [profile.dev]
-debug = "line-tables-only"
+debug = 2
 
 # Override for fast sha256 hashing in dev builds
 [profile.dev.package.sha2]
