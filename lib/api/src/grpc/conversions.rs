@@ -272,6 +272,7 @@ impl From<segment::data_types::index::TextIndexParams> for PayloadIndexParams {
             lowercase,
             ascii_folding,
             phrase_matching,
+            fuzzy_matching,
             on_disk,
             stopwords,
             stemmer,
@@ -292,6 +293,7 @@ impl From<segment::data_types::index::TextIndexParams> for PayloadIndexParams {
                 min_token_len: min_token_len.map(|x| x as u64),
                 max_token_len: max_token_len.map(|x| x as u64),
                 phrase_matching,
+                fuzzy_matching,
                 on_disk,
                 stopwords: stopwords_set,
                 stemmer: stemming_algo,
@@ -590,6 +592,7 @@ impl TryFrom<TextIndexParams> for segment::data_types::index::TextIndexParams {
             min_token_len,
             max_token_len,
             phrase_matching,
+            fuzzy_matching,
             on_disk,
             stopwords,
             stemmer,
@@ -620,6 +623,7 @@ impl TryFrom<TextIndexParams> for segment::data_types::index::TextIndexParams {
             min_token_len: min_token_len.map(|x| x as usize),
             max_token_len: max_token_len.map(|x| x as usize),
             phrase_matching,
+            fuzzy_matching,
             on_disk,
             stopwords: stopwords_converted,
             stemmer,
@@ -2020,6 +2024,23 @@ impl From<segment::types::ValuesCount> for ValuesCount {
     }
 }
 
+fn grpc_fuzzy_params_to_segment(params: Option<grpc::FuzzyParams>) -> segment::types::FuzzyParams {
+    let params = params.unwrap_or_default();
+    segment::types::FuzzyParams {
+        max_edits: params.max_edits.unwrap_or(1) as u8,
+        prefix_length: params.prefix_length.unwrap_or(0) as u8,
+        max_expansions: params.max_expansions.unwrap_or(30),
+    }
+}
+
+fn segment_fuzzy_params_to_grpc(params: &segment::types::FuzzyParams) -> grpc::FuzzyParams {
+    grpc::FuzzyParams {
+        max_edits: Some(params.max_edits as u32),
+        prefix_length: Some(params.prefix_length as u32),
+        max_expansions: Some(params.max_expansions),
+    }
+}
+
 impl TryFrom<Match> for segment::types::Match {
     type Error = Status;
 
@@ -2042,6 +2063,51 @@ impl TryFrom<Match> for segment::types::Match {
                 }
                 MatchValue::TextAny(text_any) => {
                     segment::types::Match::TextAny(segment::types::MatchTextAny { text_any })
+                }
+                MatchValue::FuzzyText(ft) => {
+                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                        fuzzy: segment::types::Fuzzy::Text {
+                            text: ft.text,
+                            params: Some(grpc_fuzzy_params_to_segment(ft.params)),
+                        },
+                    })
+                }
+                MatchValue::FuzzyPhrase(fp) => {
+                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                        fuzzy: segment::types::Fuzzy::Phrase {
+                            phrase: fp.phrase,
+                            params: Some(grpc_fuzzy_params_to_segment(fp.params)),
+                        },
+                    })
+                }
+                MatchValue::FuzzyTextAny(fta) => {
+                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                        fuzzy: segment::types::Fuzzy::TextAny {
+                            text_any: fta.text_any,
+                            params: Some(grpc_fuzzy_params_to_segment(fta.params)),
+                        },
+                    })
+                }
+                MatchValue::Fuzzy(fuzzy) => {
+                    let params = Some(grpc_fuzzy_params_to_segment(fuzzy.params));
+                    match fuzzy.fuzzy_value {
+                        Some(crate::grpc::fuzzy::FuzzyValue::Text(text)) => {
+                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                                fuzzy: segment::types::Fuzzy::Text { text, params },
+                            })
+                        }
+                        Some(crate::grpc::fuzzy::FuzzyValue::Phrase(phrase)) => {
+                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                                fuzzy: segment::types::Fuzzy::Phrase { phrase, params },
+                            })
+                        }
+                        Some(crate::grpc::fuzzy::FuzzyValue::TextAny(text_any)) => {
+                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                                fuzzy: segment::types::Fuzzy::TextAny { text_any, params },
+                            })
+                        }
+                        None => return Err(Status::invalid_argument("Malformed Fuzzy condition")),
+                    }
                 }
             }),
             _ => Err(Status::invalid_argument("Malformed Match condition")),
@@ -2086,6 +2152,24 @@ impl From<segment::types::Match> for Match {
             segment::types::Match::TextAny(segment::types::MatchTextAny { text_any }) => {
                 MatchValue::TextAny(text_any)
             }
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                fuzzy: segment::types::Fuzzy::Text { text, params },
+            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
+                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::Text(text)),
+                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+            }),
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                fuzzy: segment::types::Fuzzy::Phrase { phrase, params },
+            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
+                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::Phrase(phrase)),
+                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+            }),
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                fuzzy: segment::types::Fuzzy::TextAny { text_any, params },
+            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
+                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::TextAny(text_any)),
+                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+            }),
         };
         Self {
             match_value: Some(match_value),

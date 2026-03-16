@@ -231,6 +231,9 @@ impl InvertedIndex for MutableInvertedIndex {
             ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens)),
             ParsedQuery::Phrase(phrase) => self.filter_has_phrase(phrase),
             ParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
+            ParsedQuery::FuzzyAllTokens(tokens) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(tokens) => todo!(),
+            ParsedQuery::FuzzyPhrase(phrase) => todo!(),
         }
     }
 
@@ -272,6 +275,9 @@ impl InvertedIndex for MutableInvertedIndex {
                 // Check that at least one token is in document
                 doc.has_any(query)
             }
+            ParsedQuery::FuzzyAllTokens(document) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(query) => todo!(),
+            ParsedQuery::FuzzyPhrase(document) => todo!(),
         }
     }
 

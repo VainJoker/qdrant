@@ -161,6 +161,7 @@ fn test_prefix_search() {
         max_token_len: None,
         lowercase: None,
         phrase_matching: None,
+        fuzzy_matching: None,
         stopwords: None,
         on_disk: None,
         stemmer: None,
@@ -213,6 +214,7 @@ fn test_phrase_matching() {
         lowercase: Some(true),
         on_disk: None,
         phrase_matching: Some(true), // Enable phrase matching
+        fuzzy_matching: None,
         stopwords: None,
         stemmer: None,
         ascii_folding: None,
@@ -323,6 +325,7 @@ fn test_ascii_folding_in_full_text_index_word() {
         lowercase: None,
         on_disk: None,
         phrase_matching: None,
+        fuzzy_matching: None,
         stopwords: None,
         stemmer: None,
         ascii_folding: Some(true),

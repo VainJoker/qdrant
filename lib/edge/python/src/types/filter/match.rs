@@ -36,6 +36,7 @@ impl FromPyObject<'_, '_> for PyMatch {
                 Match::Phrase(_) => {}
                 Match::Any(_) => {}
                 Match::Except(_) => {}
+                Match::Fuzzy(_) => {}
             }
         }
 
@@ -65,6 +66,9 @@ impl<'py> IntoPyObject<'py> for PyMatch {
             Match::Phrase(phrase) => PyMatchPhrase(phrase).into_bound_py_any(py),
             Match::Any(any) => PyMatchAny(any).into_bound_py_any(py),
             Match::Except(except) => PyMatchExcept(except).into_bound_py_any(py),
+            Match::Fuzzy(_) => Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
+                "Fuzzy match is not supported in Qdrant Edge",
+            )),
         }
     }
 }
@@ -78,6 +82,7 @@ impl Repr for PyMatch {
             Match::Phrase(phrase) => PyMatchPhrase::wrap_ref(phrase).fmt(f),
             Match::Any(any) => PyMatchAny::wrap_ref(any).fmt(f),
             Match::Except(except) => PyMatchExcept::wrap_ref(except).fmt(f),
+            Match::Fuzzy(_) => write!(f, "MatchFuzzy(...)"),
         }
     }
 }

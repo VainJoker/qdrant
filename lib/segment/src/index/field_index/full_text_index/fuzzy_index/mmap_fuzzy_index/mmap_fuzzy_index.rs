@@ -5,14 +5,15 @@ use common::fs::clear_disk_cache;
 use fst::{IntoStreamer, Streamer};
 
 use super::super::FuzzyIndex;
-use super::super::params::FuzzyParams;
-use super::super::scorer::ScoredTerm;
 use crate::common::operation_error::OperationResult;
-use crate::index::field_index::full_text_index::fuzzy_index::ImmutableFuzzyIndex;
 use crate::index::field_index::full_text_index::fuzzy_index::automaton::PrefixLevenshtein;
 use crate::index::field_index::full_text_index::fuzzy_index::mmap_fuzzy_index::MmapFst;
+use crate::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, ImmutableFuzzyIndex,
+};
+use crate::types::FuzzyParams;
 
-const FUZZY_INDEX_FILE: &str = "fuzzy.fst";
+const FUZZY_INDEX_FILE: &str = "fst.dat";
 
 pub struct MmapFuzzyIndex {
     path: PathBuf,
@@ -73,9 +74,9 @@ impl MmapFuzzyIndex {
 }
 
 impl FuzzyIndex for MmapFuzzyIndex {
-    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<ScoredTerm> {
+    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut results: Vec<ScoredTerm> = Vec::with_capacity(max);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
         let mut seen: HashSet<String> = HashSet::new();
 
         'outer: for distance in 0..=params.max_edits as u32 {
@@ -107,7 +108,7 @@ impl FuzzyIndex for MmapFuzzyIndex {
                     Err(_) => continue,
                 };
                 if seen.insert(term.clone()) {
-                    results.push(ScoredTerm::new(term, query.len()));
+                    results.push(FuzzyCandidate::new(term, query.len(), distance));
                     if results.len() >= max {
                         break 'outer;
                     }
