@@ -461,6 +461,9 @@ impl InvertedIndex for MmapInvertedIndex {
             ParsedQuery::AllTokens(tokens) => self.filter_has_all(tokens),
             ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase)),
             ParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
+            ParsedQuery::FuzzyAllTokens(tokens) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(tokens) => todo!(),
+            ParsedQuery::FuzzyPhrase(phrase) => todo!(),
         }
     }
 
@@ -486,6 +489,9 @@ impl InvertedIndex for MmapInvertedIndex {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
             ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::FuzzyAllTokens(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyPhrase(fuzzy_document) => todo!(),
         }
     }
 

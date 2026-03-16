@@ -238,6 +238,10 @@ pub struct TextIndexParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phrase_matching: Option<bool>,
 
+    /// If true, build an FST index for fuzzy matching. Default: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuzzy_matching: Option<bool>,
+
     /// Ignore this set of tokens. Can select from predefined languages and/or provide a custom set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopwords: Option<StopwordsInterface>,
