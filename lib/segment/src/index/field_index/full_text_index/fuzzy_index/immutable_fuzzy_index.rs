@@ -3,10 +3,11 @@ use std::collections::HashSet;
 use fst::{IntoStreamer, Set, Streamer};
 
 use super::FuzzyIndex;
-use super::params::FuzzyParams;
-use super::scorer::ScoredTerm;
 use crate::index::field_index::full_text_index::fuzzy_index::automaton::PrefixLevenshtein;
-use crate::index::field_index::full_text_index::fuzzy_index::{MmapFuzzyIndex, MutableFuzzyIndex};
+use crate::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, MmapFuzzyIndex, MutableFuzzyIndex,
+};
+use crate::types::FuzzyParams;
 
 pub struct ImmutableFuzzyIndex {
     index: Set<Vec<u8>>,
@@ -19,9 +20,9 @@ impl ImmutableFuzzyIndex {
 }
 
 impl FuzzyIndex for ImmutableFuzzyIndex {
-    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<ScoredTerm> {
+    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut results: Vec<ScoredTerm> = Vec::with_capacity(max);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
         let mut seen: HashSet<String> = HashSet::new();
 
         'outer: for distance in 0..=params.max_edits as u32 {
@@ -49,7 +50,7 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
                     Err(_) => continue,
                 };
                 if seen.insert(term.clone()) {
-                    results.push(ScoredTerm::new(term, query.len()));
+                    results.push(FuzzyCandidate::new(term, query.len(), distance));
                     if results.len() >= max {
                         break 'outer;
                     }

@@ -272,7 +272,10 @@ pub struct FieldCondition {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Match {
-    #[prost(oneof = "r#match::MatchValue", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(
+        oneof = "r#match::MatchValue",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"
+    )]
     pub match_value: ::core::option::Option<r#match::MatchValue>,
 }
 /// Nested message and enum types in `Match`.
@@ -310,6 +313,97 @@ pub mod r#match {
         Phrase(::prost::alloc::string::String),
         /// Match any word in the text
         #[prost(string, tag = "10")]
+        TextAny(::prost::alloc::string::String),
+        /// Match text with fuzzy (approximate) matching
+        #[prost(message, tag = "11")]
+        FuzzyText(super::FuzzyText),
+        /// Match phrase text with fuzzy (approximate) matching
+        #[prost(message, tag = "12")]
+        FuzzyPhrase(super::FuzzyPhrase),
+        /// Match any word in the text with fuzzy (approximate) matching
+        #[prost(message, tag = "13")]
+        FuzzyTextAny(super::FuzzyTextAny),
+        /// Match with fuzzy (approximate) matching using new format
+        #[prost(message, tag = "14")]
+        Fuzzy(super::Fuzzy),
+    }
+}
+/// Parameters for fuzzy (approximate) matching
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyParams {
+    /// Maximum edit distance (Levenshtein). 0..=2, default 1.
+    #[prost(uint32, optional, tag = "1")]
+    pub max_edits: ::core::option::Option<u32>,
+    /// Number of initial characters that must match exactly. Default 0.
+    #[prost(uint32, optional, tag = "2")]
+    pub prefix_length: ::core::option::Option<u32>,
+    /// Maximum number of terms to expand per token. Default 30, capped at 30.
+    #[prost(uint32, optional, tag = "3")]
+    pub max_expansions: ::core::option::Option<u32>,
+}
+/// Fuzzy text match
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyText {
+    /// Text to match
+    #[prost(string, tag = "1")]
+    pub text: ::prost::alloc::string::String,
+    /// Fuzzy matching parameters
+    #[prost(message, optional, tag = "2")]
+    pub params: ::core::option::Option<FuzzyParams>,
+}
+/// Fuzzy phrase match
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyPhrase {
+    /// Phrase to match
+    #[prost(string, tag = "1")]
+    pub phrase: ::prost::alloc::string::String,
+    /// Fuzzy matching parameters
+    #[prost(message, optional, tag = "2")]
+    pub params: ::core::option::Option<FuzzyParams>,
+}
+/// Fuzzy text-any match
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyTextAny {
+    /// Text (any word) to match
+    #[prost(string, tag = "1")]
+    pub text_any: ::prost::alloc::string::String,
+    /// Fuzzy matching parameters
+    #[prost(message, optional, tag = "2")]
+    pub params: ::core::option::Option<FuzzyParams>,
+}
+/// Unified Fuzzy match
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Fuzzy {
+    /// Fuzzy matching parameters
+    #[prost(message, optional, tag = "4")]
+    pub params: ::core::option::Option<FuzzyParams>,
+    #[prost(oneof = "fuzzy::FuzzyValue", tags = "1, 2, 3")]
+    pub fuzzy_value: ::core::option::Option<fuzzy::FuzzyValue>,
+}
+/// Nested message and enum types in `Fuzzy`.
+pub mod fuzzy {
+    #[derive(serde::Serialize)]
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum FuzzyValue {
+        /// Text to match
+        #[prost(string, tag = "1")]
+        Text(::prost::alloc::string::String),
+        /// Phrase to match
+        #[prost(string, tag = "2")]
+        Phrase(::prost::alloc::string::String),
+        /// Text to match (any word)
+        #[prost(string, tag = "3")]
         TextAny(::prost::alloc::string::String),
     }
 }
@@ -1482,6 +1576,10 @@ pub struct TextIndexParams {
     /// Default: true.
     #[prost(bool, optional, tag = "10")]
     pub enable_hnsw: ::core::option::Option<bool>,
+    /// If true - build an FST index for fuzzy matching.
+    /// Default: false.
+    #[prost(bool, optional, tag = "11")]
+    pub fuzzy_matching: ::core::option::Option<bool>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

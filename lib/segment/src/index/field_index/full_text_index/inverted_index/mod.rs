@@ -132,6 +132,52 @@ impl Document {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct FuzzyDocument(Vec<TokenSet>);
+
+impl FuzzyDocument {
+    pub fn new(groups: Vec<TokenSet>) -> Self {
+        Self(groups)
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn groups(&self) -> &[TokenSet] {
+        &self.0
+    }
+
+    pub fn into_inner(self) -> Vec<TokenSet> {
+        self.0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &TokenSet> {
+        self.0.iter()
+    }
+
+    /// Checks if a contiguous window of this document's groups matches the exact [`Document`].
+    pub fn matches_document(&self, doc: &Document) -> bool {
+        let tokens = doc.tokens();
+        let groups = self.groups();
+
+        if tokens.len() < groups.len() || tokens.is_empty() || groups.is_empty() {
+            return false;
+        }
+
+        tokens.windows(groups.len()).any(|window| {
+            window
+                .iter()
+                .zip(groups.iter())
+                .all(|(token_id, group)| group.contains(token_id))
+        })
+    }
+}
+
 impl IntoIterator for Document {
     type Item = TokenId;
     type IntoIter = std::vec::IntoIter<TokenId>;
@@ -161,6 +207,16 @@ pub enum ParsedQuery {
 
     /// All these tokens must be present in the document, in the same order as this query.
     Phrase(Document),
+
+    /// AND semantics: every group must have at least one match in the document.
+    FuzzyAllTokens(FuzzyDocument),
+
+    /// OR semantics: any fuzzy-expanded token matching the document is sufficient.
+    FuzzyAnyTokens(TokenSet),
+
+    /// Position-ordered phrase match: the document must contain a contiguous window
+    /// where position *i* matches at least one token from `groups[i]`.
+    FuzzyPhrase(FuzzyDocument),
 }
 
 pub trait InvertedIndex {
@@ -235,6 +291,9 @@ pub trait InvertedIndex {
             ParsedQuery::AnyTokens(tokens) => {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
             }
+            ParsedQuery::FuzzyAllTokens(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyPhrase(fuzzy_document) => todo!(),
         }
     }
 

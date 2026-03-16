@@ -115,7 +115,63 @@ message Match {
     string phrase = 9;
     // Match any word in the text
     string text_any = 10;
+    // Match text with fuzzy (approximate) matching
+    FuzzyText fuzzy_text = 11;
+    // Match phrase text with fuzzy (approximate) matching
+    FuzzyPhrase fuzzy_phrase = 12;
+    // Match any word in the text with fuzzy (approximate) matching
+    FuzzyTextAny fuzzy_text_any = 13;
+    // Match with fuzzy (approximate) matching using new format
+    Fuzzy fuzzy = 14;
   }
+}
+
+// Parameters for fuzzy (approximate) matching
+message FuzzyParams {
+  // Maximum edit distance (Levenshtein). 0..=2, default 1.
+  optional uint32 max_edits = 1;
+  // Number of initial characters that must match exactly. Default 0.
+  optional uint32 prefix_length = 2;
+  // Maximum number of terms to expand per token. Default 30, capped at 30.
+  optional uint32 max_expansions = 3;
+}
+
+// Fuzzy text match
+message FuzzyText {
+  // Text to match
+  string text = 1;
+  // Fuzzy matching parameters
+  optional FuzzyParams params = 2;
+}
+
+// Fuzzy phrase match
+message FuzzyPhrase {
+  // Phrase to match
+  string phrase = 1;
+  // Fuzzy matching parameters
+  optional FuzzyParams params = 2;
+}
+
+// Fuzzy text-any match
+message FuzzyTextAny {
+  // Text (any word) to match
+  string text_any = 1;
+  // Fuzzy matching parameters
+  optional FuzzyParams params = 2;
+}
+
+// Unified Fuzzy match
+message Fuzzy {
+  oneof fuzzy_value {
+     // Text to match
+     string text = 1;
+     // Phrase to match
+     string phrase = 2;
+     // Text to match (any word)
+     string text_any = 3;
+  }
+  // Fuzzy matching parameters
+  optional FuzzyParams params = 4;
 }
 
 message RepeatedStrings {

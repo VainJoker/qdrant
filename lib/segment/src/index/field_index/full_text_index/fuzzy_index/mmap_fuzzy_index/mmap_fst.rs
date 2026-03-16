@@ -24,7 +24,6 @@ impl MmapFst {
     }
 
     pub fn create(path: PathBuf, fuzzy_index: &ImmutableFuzzyIndex) -> std::io::Result<()> {
-        // Create a new empty file, where we will write the compressed posting lists and the header
         let (file, temp_path) = tempfile::Builder::new()
             .prefix(path.file_name().ok_or(io::ErrorKind::InvalidInput)?)
             .tempfile_in(path.parent().ok_or(io::ErrorKind::InvalidInput)?)?
@@ -32,10 +31,8 @@ impl MmapFst {
         let file = File::from_parts::<&Path>(file, temp_path.as_ref());
         let mut bufw = io::BufWriter::new(&file);
 
-        // Write the header to the buffer
         bufw.write_all(fuzzy_index.get_index_as_bytes())?;
 
-        // Explicitly flush write buffer so we can catch IO errors
         bufw.flush()?;
         drop(bufw);
 

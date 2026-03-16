@@ -189,6 +189,7 @@ impl FieldIndex {
                 Some(Match::Phrase(MatchPhrase { phrase })) => Some(
                     full_text_index.check_payload_match::<true>(payload_value, phrase, hw_counter),
                 ),
+                // TODO: todo!()
                 _ => None,
             },
             FieldIndex::UuidIndex(_) => None,

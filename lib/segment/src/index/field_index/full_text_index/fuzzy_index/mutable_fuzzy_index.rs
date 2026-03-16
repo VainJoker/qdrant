@@ -1,9 +1,8 @@
 use std::collections::BTreeSet;
 
 use super::FuzzyIndex;
-use super::params::FuzzyParams;
-use super::scorer::ScoredTerm;
-use crate::common::operation_error::OperationResult;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use crate::types::FuzzyParams;
 
 pub struct MutableFuzzyIndex {
     terms: BTreeSet<String>,
@@ -45,9 +44,9 @@ impl Default for MutableFuzzyIndex {
 }
 
 impl FuzzyIndex for MutableFuzzyIndex {
-    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<ScoredTerm> {
+    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut buckets: Vec<Vec<ScoredTerm>> =
+        let mut buckets: Vec<Vec<FuzzyCandidate>> =
             (0..=params.max_edits as u32).map(|_| Vec::new()).collect();
         let mut total = 0usize;
 
@@ -62,8 +61,12 @@ impl FuzzyIndex for MutableFuzzyIndex {
                 }
             }
 
-            if let Some(dist) = levenshtein_distance(query, term, params.max_edits as u32) {
-                buckets[dist as usize].push(ScoredTerm::new(term.to_string(), query.len()));
+            if let Some(distance) = levenshtein_distance(query, term, params.max_edits as u32) {
+                buckets[distance as usize].push(FuzzyCandidate::new(
+                    term.to_string(),
+                    query.len(),
+                    distance,
+                ));
                 total += 1;
                 if total >= max {
                     break 'outer;
@@ -71,7 +74,7 @@ impl FuzzyIndex for MutableFuzzyIndex {
             }
         }
 
-        let mut results: Vec<ScoredTerm> = buckets.into_iter().flatten().collect();
+        let mut results: Vec<FuzzyCandidate> = buckets.into_iter().flatten().collect();
         results.truncate(max);
         results
     }
