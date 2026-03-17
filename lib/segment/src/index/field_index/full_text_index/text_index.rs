@@ -719,12 +719,7 @@ impl PayloadFieldIndex for FullTextIndex {
         &'a self,
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
-<<<<<<< HEAD
     ) -> OperationResult<Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>>> {
-=======
-    ) -> Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>> {
-
->>>>>>> 2877ebbae (chore: Persist the fuzzy index within the text index)
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {

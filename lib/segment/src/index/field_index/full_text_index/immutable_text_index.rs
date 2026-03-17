@@ -79,10 +79,7 @@ impl ImmutableFullTextIndex {
     pub fn open_mmap(index: MmapFullTextIndex) -> Self {
         let inverted_index = ImmutableInvertedIndex::from(&index.inverted_index);
 
-        let fuzzy_index = index
-            .fuzzy_index
-            .as_ref()
-            .map(ImmutableFuzzyIndex::from);
+        let fuzzy_index = index.fuzzy_index.as_ref().map(ImmutableFuzzyIndex::from);
 
         // ToDo(rocksdb): this is a duplication of tokenizer,
         // ToDo(rocksdb): But once the RocksDB is removed, we can always use the tokenizer from the index.

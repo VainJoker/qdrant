@@ -6,7 +6,7 @@ use itertools::Either;
 
 use super::posting_list::PostingList;
 use super::postings_iterator::{intersect_postings_iterator, merge_postings_iterator};
-use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::OperationResult;
 
 #[cfg_attr(test, derive(Clone))]
