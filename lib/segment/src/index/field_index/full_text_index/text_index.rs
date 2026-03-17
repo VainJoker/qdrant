@@ -14,9 +14,9 @@ use semver::Op;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::fuzzy_index::FuzzyIndex;
+use super::fuzzy_index::{FuzzyIndex, MutableFuzzyIndex};
 use super::immutable_text_index::ImmutableFullTextIndex;
-use super::inverted_index::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::inverted_index::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
 use super::mutable_text_index::MutableFullTextIndex;
 use super::tokenizers::Tokenizer;
@@ -369,93 +369,99 @@ impl FullTextIndex {
         match_fuzzy: &MatchFuzzy,
         hw_counter: &HardwareCounterCell,
     ) -> Option<ParsedQuery> {
-        todo!()
-        // let expander: &dyn TermExpander = match self {
-        //     Self::Mutable(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
-        //     Self::Immutable(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
-        //     Self::Mmap(index) => index.get_fuzzy_expander()? as &dyn TermExpander,
-        // };
+        // Build a fuzzy index over the current vocabulary.
+        let mut fuzzy_index = MutableFuzzyIndex::build_index(
+            match self {
+                Self::Mutable(idx) => idx
+                    .inverted_index
+                    .vocab_with_postings_len_iter()
+                    .map(|(t, _)| t.to_owned())
+                    .collect::<Vec<_>>(),
+                Self::Immutable(idx) => idx
+                    .inverted_index
+                    .vocab_with_postings_len_iter()
+                    .map(|(t, _)| t.to_owned())
+                    .collect::<Vec<_>>(),
+                Self::Mmap(idx) => idx
+                    .inverted_index
+                    .vocab_with_postings_len_iter()
+                    .map(|(t, _)| t.to_owned())
+                    .collect::<Vec<_>>(),
+            }
+            .into_iter(),
+        );
 
-        // let vocab_lookup = |term: &str| self.get_token(term, hw_counter);
+        let default_fuzzy_params = FuzzyParams::default();
 
-        // let default_fuzzy_params = FuzzyParams::default();
+        // Expand a single query token: run fuzzy search, then resolve term → TokenId.
+        let mut expand_token = |token: &str, params: &FuzzyParams| -> AHashSet<TokenId> {
+            let candidates = fuzzy_index.search(token, params);
+            candidates
+                .into_iter()
+                .filter_map(|c| self.get_token(&c.term, hw_counter))
+                .collect()
+        };
 
-        // match &match_fuzzy.fuzzy {
-        //     Fuzzy::Text { text, params } => {
-        //         // Text (AND semantics): each query token must match at least one
-        //         // expanded candidate. We create a TokenSet per query token (OR group),
-        //         // and the filter intersects across groups.
-        //         let params = params.as_ref().unwrap_or(&default_fuzzy_params);
-        //         let mut token_sets: Vec<TokenSet> = Vec::new();
-        //         let mut has_query_tokens = false;
-        //         let mut has_token_without_candidates = false;
+        match &match_fuzzy.fuzzy {
+            Fuzzy::Text { text, params } => {
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                let mut token_sets: Vec<TokenSet> = Vec::new();
+                let mut has_query_tokens = false;
+                let mut has_token_without_candidates = false;
 
-        //         self.get_tokenizer().tokenize_query(text, |token| {
-        //             has_query_tokens = true;
-        //             let candidates = expander.expand_term(&token, params, &vocab_lookup);
-        //             let ids: AHashSet<TokenId> =
-        //                 candidates.into_iter().map(|c| c.token_id).collect();
-        //             if ids.is_empty() {
-        //                 has_token_without_candidates = true;
-        //             } else {
-        //                 token_sets.push(TokenSet::from(ids));
-        //             }
-        //         });
+                self.get_tokenizer().tokenize_query(text, |token| {
+                    has_query_tokens = true;
+                    let ids = expand_token(token.as_ref(), params);
+                    if ids.is_empty() {
+                        has_token_without_candidates = true;
+                    } else {
+                        token_sets.push(TokenSet::from(ids));
+                    }
+                });
 
-        //         if !has_query_tokens || has_token_without_candidates {
-        //             return None;
-        //         }
+                if !has_query_tokens || has_token_without_candidates {
+                    return None;
+                }
 
-        //         Some(FuzzyParsedQuery::AllTokens(FuzzyDocument::new(token_sets)))
-        //     }
-        //     Fuzzy::TextAny { text_any, params } => {
-        //         let params = params.as_ref().unwrap_or(&default_fuzzy_params);
-        //         // TextAny (OR semantics): any query token matching any expanded
-        //         // candidate is sufficient.
-        //         let mut all_token_ids = AHashSet::new();
+                Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(token_sets)))
+            }
+            Fuzzy::TextAny { text_any, params } => {
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                let mut all_token_ids = AHashSet::new();
 
-        //         self.get_tokenizer().tokenize_query(text_any, |token| {
-        //             let candidates = expander.expand_term(&token, params, &vocab_lookup);
-        //             for candidate in candidates {
-        //                 all_token_ids.insert(candidate.token_id);
-        //             }
-        //         });
+                self.get_tokenizer().tokenize_query(text_any, |token| {
+                    all_token_ids.extend(expand_token(token.as_ref(), params));
+                });
 
-        //         if all_token_ids.is_empty() {
-        //             return None;
-        //         }
+                if all_token_ids.is_empty() {
+                    return None;
+                }
 
-        //         Some(FuzzyParsedQuery::AnyTokens(TokenSet::from(all_token_ids)))
-        //     }
-        //     Fuzzy::Phrase { phrase, params } => {
-        //         let params = params.as_ref().unwrap_or(&default_fuzzy_params);
-        //         // Phrase fuzzy: expand each phrase token into a set of candidate
-        //         // token IDs, preserving position order. The inverted-index level
-        //         // filters candidates (AND), and check_match verifies sliding-window
-        //         // positional ordering.
-        //         let mut token_sets: Vec<TokenSet> = Vec::new();
-        //         let mut has_query_tokens = false;
-        //         let mut has_token_without_candidates = false;
+                Some(ParsedQuery::FuzzyAnyTokens(TokenSet::from(all_token_ids)))
+            }
+            Fuzzy::Phrase { phrase, params } => {
+                let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                let mut token_sets: Vec<TokenSet> = Vec::new();
+                let mut has_query_tokens = false;
+                let mut has_token_without_candidates = false;
 
-        //         self.get_tokenizer().tokenize_query(phrase, |token| {
-        //             has_query_tokens = true;
-        //             let candidates = expander.expand_term(&token, params, &vocab_lookup);
-        //             let ids: AHashSet<TokenId> =
-        //                 candidates.into_iter().map(|c| c.token_id).collect();
-        //             if ids.is_empty() {
-        //                 has_token_without_candidates = true;
-        //             } else {
-        //                 token_sets.push(TokenSet::from(ids));
-        //             }
-        //         });
+                self.get_tokenizer().tokenize_query(phrase, |token| {
+                    has_query_tokens = true;
+                    let ids = expand_token(token.as_ref(), params);
+                    if ids.is_empty() {
+                        has_token_without_candidates = true;
+                    } else {
+                        token_sets.push(TokenSet::from(ids));
+                    }
+                });
 
-        //         if !has_query_tokens || has_token_without_candidates {
-        //             return None;
-        //         }
+                if !has_query_tokens || has_token_without_candidates {
+                    return None;
+                }
 
-        //         Some(FuzzyParsedQuery::Phrase(FuzzyDocument::new(token_sets)))
-        //     }
-        // }
+                Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(token_sets)))
+            }
+        }
     }
 
     pub fn parse_tokenset(&self, text: &str, hw_counter: &HardwareCounterCell) -> TokenSet {
@@ -508,52 +514,70 @@ impl FullTextIndex {
         text: &str,
         hw_counter: &HardwareCounterCell,
     ) -> bool {
-        todo!()
-        // let mut query_opt = None;
-        // if let Some(match_fuzzy) = match_fuzzy {
-        //     query_opt = self.parse_fuzzy_query(match_fuzzy, hw_counter);
-        // }
+        let query_opt = if IS_PHRASE {
+            self.parse_phrase_query(text, hw_counter)
+        } else {
+            self.parse_text_query(text, hw_counter)
+        };
 
-        // query_opt = if IS_PHRASE {
-        //     self.parse_phrase_query(text, hw_counter)
-        // } else {
-        //     self.parse_text_query(text, hw_counter)
-        // };
+        let Some(query) = query_opt else {
+            return false;
+        };
 
-        // let Some(query) = query_opt else {
-        //     return false;
-        // };
+        FullTextIndex::get_values(payload_value)
+            .iter()
+            .any(|value| match &query {
+                ParsedQuery::AllTokens(q) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    tokenset.has_subset(q)
+                }
+                ParsedQuery::Phrase(q) => {
+                    let document = self.parse_document(value, hw_counter);
+                    document.map(|doc| doc.has_phrase(q)).unwrap_or(false)
+                }
+                ParsedQuery::AnyTokens(q) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    tokenset.has_any(q)
+                }
+                ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
+                }
+                ParsedQuery::FuzzyAnyTokens(q) => {
+                    let tokenset = self.parse_tokenset(value, hw_counter);
+                    tokenset.has_any(q)
+                }
+                ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                    let document = self.parse_document(value, hw_counter);
+                    document
+                        .map(|doc| fuzzy_doc.matches_document(&doc))
+                        .unwrap_or(false)
+                }
+            })
+    }
 
-        // FullTextIndex::get_values(payload_value)
-        //     .iter()
-        //     .any(|value| match &query {
-        //         ParsedQuery::AllTokens(query) => {
-        //             let tokenset = self.parse_tokenset(value, hw_counter);
-        //             tokenset.has_subset(query)
-        //         }
-        //         ParsedQuery::Phrase(query) => {
-        //             let document = self.parse_document(value, hw_counter);
-        //             document.map(|doc| doc.has_phrase(query)).unwrap_or(false)
-        //         }
-        //         ParsedQuery::AnyTokens(query) => {
-        //             let tokenset = self.parse_tokenset(value, hw_counter);
-        //             tokenset.has_any(query)
-        //         }
-        //         ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
-        //             let tokenset = self.parse_tokenset(value, hw_counter);
-        //             fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
-        //         }
-        //         ParsedQuery::FuzzyAnyTokens(query) => {
-        //             let tokenset = self.parse_tokenset(value, hw_counter);
-        //             tokenset.has_any(query)
-        //         }
-        //         ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
-        //             let document = self.parse_document(value, hw_counter);
-        //             document
-        //                 .map(|doc| fuzzy_doc.matches_document(&doc))
-        //                 .unwrap_or(false)
-        //         }
-        //     })
+    /// Checks whether a raw text value matches the given parsed query.
+    pub fn check_value_match(
+        &self,
+        query: &ParsedQuery,
+        value: &str,
+        hw_counter: &HardwareCounterCell,
+    ) -> bool {
+        match query {
+            ParsedQuery::AllTokens(q) => self.parse_tokenset(value, hw_counter).has_subset(q),
+            ParsedQuery::Phrase(q) => self
+                .parse_document(value, hw_counter)
+                .is_some_and(|doc| doc.has_phrase(q)),
+            ParsedQuery::AnyTokens(q) => self.parse_tokenset(value, hw_counter).has_any(q),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                let tokenset = self.parse_tokenset(value, hw_counter);
+                fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
+            }
+            ParsedQuery::FuzzyAnyTokens(q) => self.parse_tokenset(value, hw_counter).has_any(q),
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self
+                .parse_document(value, hw_counter)
+                .is_some_and(|doc| fuzzy_doc.matches_document(&doc)),
+        }
     }
 
     // /// Checks the text directly against the payload value using fuzzy matching.

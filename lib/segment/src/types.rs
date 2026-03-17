@@ -2501,7 +2501,6 @@ impl Default for FuzzyParams {
 impl FuzzyParams {
     pub const MAX_EDITS_DISTANCE: u8 = 2;
     pub const MAX_EXPANSIONS_CAP: u32 = 30;
-    pub const MIN_TERM_LENGTH: usize = 3;
 
     fn default_max_edits_distance() -> u8 {
         1

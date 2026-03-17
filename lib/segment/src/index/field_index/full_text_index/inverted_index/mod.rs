@@ -291,9 +291,37 @@ pub trait InvertedIndex {
             ParsedQuery::AnyTokens(tokens) => {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
             }
-            ParsedQuery::FuzzyAllTokens(fuzzy_document) => todo!(),
-            ParsedQuery::FuzzyAnyTokens(fuzzy_document) => todo!(),
-            ParsedQuery::FuzzyPhrase(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                // Union all expanded token IDs for a subset-style estimate.
+                let all_tokens: TokenSet = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+                self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter)
+            }
+            ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.estimate_has_any_cardinality(tokens, condition, hw_counter)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                // Approximate: treat like a phrase of the same length.
+                if fuzzy_doc.is_empty() {
+                    return CardinalityEstimation::exact(0).with_primary_clause(
+                        PrimaryCondition::Condition(Box::new(condition.clone())),
+                    );
+                }
+                let all_tokens: TokenSet = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+                let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);
+                let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
+                CardinalityEstimation {
+                    primary_clauses: any_est.primary_clauses,
+                    min: any_est.min / phrase_sq,
+                    exp: any_est.exp / phrase_sq,
+                    max: any_est.max / phrase_sq,
+                }
+            }
         }
     }
 

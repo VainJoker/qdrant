@@ -20,7 +20,7 @@ impl ImmutableFuzzyIndex {
 }
 
 impl FuzzyIndex for ImmutableFuzzyIndex {
-    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
+    fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
         let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
         let mut seen: HashSet<String> = HashSet::new();

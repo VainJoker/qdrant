@@ -6,7 +6,9 @@ use super::posting_list::PostingList;
 use crate::index::field_index::full_text_index::inverted_index::positions::{
     PartialDocument, Positions, TokenPosition,
 };
-use crate::index::field_index::full_text_index::inverted_index::{Document, TokenId};
+use crate::index::field_index::full_text_index::inverted_index::{
+    Document, FuzzyDocument, TokenId, TokenSet,
+};
 
 pub fn intersect_postings_iterator<'a>(
     mut postings: Vec<&'a PostingList>,
@@ -191,6 +193,81 @@ pub fn check_compressed_postings_phrase<'a>(
     };
 
     phrase_in_all_postings(point_id, phrase, Vec::new(), &mut posting_iterators)
+}
+
+/// Checks if `point_id`'s document satisfies the fuzzy phrase.
+///
+/// Collects positions of every expanded token (across all groups) that appears in the
+/// document, then delegates to [`PartialDocument::has_fuzzy_phrase`].
+pub fn check_compressed_postings_fuzzy_phrase<'a>(
+    phrase: &FuzzyDocument,
+    point_id: PointOffsetType,
+    token_to_posting: impl Fn(&TokenId) -> Option<PostingListView<'a, Positions>>,
+) -> bool {
+    let mut tokens_positions: Vec<TokenPosition> = Vec::new();
+
+    for group in phrase.iter() {
+        for &token_id in group.tokens() {
+            let Some(posting) = token_to_posting(&token_id) else {
+                continue;
+            };
+            let mut iter = posting.into_iter();
+            let Some(elem) = iter.advance_until_greater_or_equal(point_id) else {
+                continue;
+            };
+            if elem.id == point_id {
+                tokens_positions.extend(elem.value.to_token_positions(token_id));
+            }
+        }
+    }
+
+    if tokens_positions.is_empty() {
+        return false;
+    }
+
+    // The same dictionary token can appear in multiple fuzzy groups, which may produce
+    // duplicate (token_id, position) pairs for the same document. `PartialDocument`
+    // expects callers to provide deduplicated input.
+    tokens_positions.sort_unstable();
+    tokens_positions.dedup();
+
+    PartialDocument::new(tokens_positions).has_fuzzy_phrase(phrase)
+}
+
+/// Returns an iterator over points whose documents satisfy the fuzzy phrase query.
+///
+/// Candidates are generated from the union of all expanded tokens across all phrase
+/// groups, then filtered by [`check_compressed_postings_fuzzy_phrase`].
+pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
+    phrase: FuzzyDocument,
+    token_to_posting: impl Fn(&TokenId) -> Option<PostingListView<'a, Positions>> + 'a,
+    is_active: impl Fn(PointOffsetType) -> bool + 'a,
+) -> impl Iterator<Item = PointOffsetType> + 'a {
+    if phrase.is_empty() {
+        return Either::Left(std::iter::empty());
+    }
+
+    // Union of all token IDs across all groups for candidate generation.
+    let unique_tokens: TokenSet = phrase
+        .iter()
+        .flat_map(|group| group.tokens().iter().copied())
+        .collect();
+
+    let posting_views: Vec<_> = unique_tokens
+        .tokens()
+        .iter()
+        .filter_map(|&tid| token_to_posting(&tid))
+        .collect();
+
+    if posting_views.is_empty() {
+        return Either::Left(std::iter::empty());
+    }
+
+    Either::Right(
+        merge_compressed_postings_iterator(posting_views, is_active).filter(move |&point_id| {
+            check_compressed_postings_fuzzy_phrase(&phrase, point_id, &token_to_posting)
+        }),
+    )
 }
 
 #[cfg(test)]
