@@ -2,19 +2,12 @@ mod automaton;
 mod immutable_fuzzy_index;
 mod mmap_fuzzy_index;
 mod mutable_fuzzy_index;
-mod scorer;
 
-use common::counter::hardware_counter::HardwareCounterCell;
-use common::types::PointOffsetType;
 pub(super) use immutable_fuzzy_index::ImmutableFuzzyIndex;
 pub(super) use mmap_fuzzy_index::MmapFuzzyIndex;
 pub(super) use mutable_fuzzy_index::MutableFuzzyIndex;
 
-use crate::index::field_index::CardinalityEstimation;
-use crate::index::field_index::full_text_index::inverted_index::{
-    Document, InvertedIndex, TokenId, TokenSet,
-};
-use crate::types::{FieldCondition, FuzzyParams};
+use crate::types::FuzzyParams;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuzzyCandidate {
@@ -41,18 +34,4 @@ impl FuzzyCandidate {
 /// fuzzy query filtering and matching using the same internal postings data.
 pub trait FuzzyIndex {
     fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate>;
-}
-
-/// Common interface for fuzzy term expansion.
-///
-/// Short terms (below [`FuzzyParams::MIN_TERM_LENGTH`]) are matched exactly
-/// (edit distance = 0) because fuzzy expansion is not meaningful for them.
-/// All other terms are expanded by delegating to [`FuzzyIndex::search`], which
-/// handles distance iteration, deduplication, and the `max_expansions` cap.
-pub fn expand_term(
-    term: &str,
-    params: &FuzzyParams,
-    index: &impl FuzzyIndex,
-) -> Vec<FuzzyCandidate> {
-    index.search(term, params)
 }
