@@ -2088,27 +2088,6 @@ impl TryFrom<Match> for segment::types::Match {
                         },
                     })
                 }
-                MatchValue::Fuzzy(fuzzy) => {
-                    let params = Some(grpc_fuzzy_params_to_segment(fuzzy.params));
-                    match fuzzy.fuzzy_value {
-                        Some(crate::grpc::fuzzy::FuzzyValue::Text(text)) => {
-                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                                fuzzy: segment::types::Fuzzy::Text { text, params },
-                            })
-                        }
-                        Some(crate::grpc::fuzzy::FuzzyValue::Phrase(phrase)) => {
-                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                                fuzzy: segment::types::Fuzzy::Phrase { phrase, params },
-                            })
-                        }
-                        Some(crate::grpc::fuzzy::FuzzyValue::TextAny(text_any)) => {
-                            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                                fuzzy: segment::types::Fuzzy::TextAny { text_any, params },
-                            })
-                        }
-                        None => return Err(Status::invalid_argument("Malformed Fuzzy condition")),
-                    }
-                }
             }),
             _ => Err(Status::invalid_argument("Malformed Match condition")),
         }
@@ -2154,20 +2133,20 @@ impl From<segment::types::Match> for Match {
             }
             segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
                 fuzzy: segment::types::Fuzzy::Text { text, params },
-            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
-                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::Text(text)),
+            }) => MatchValue::FuzzyText(crate::grpc::FuzzyText {
+                text,
                 params: params.as_ref().map(segment_fuzzy_params_to_grpc),
             }),
             segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
                 fuzzy: segment::types::Fuzzy::Phrase { phrase, params },
-            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
-                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::Phrase(phrase)),
+            }) => MatchValue::FuzzyPhrase(crate::grpc::FuzzyPhrase {
+                phrase,
                 params: params.as_ref().map(segment_fuzzy_params_to_grpc),
             }),
             segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
                 fuzzy: segment::types::Fuzzy::TextAny { text_any, params },
-            }) => MatchValue::Fuzzy(crate::grpc::Fuzzy {
-                fuzzy_value: Some(crate::grpc::fuzzy::FuzzyValue::TextAny(text_any)),
+            }) => MatchValue::FuzzyTextAny(crate::grpc::FuzzyTextAny {
+                text_any,
                 params: params.as_ref().map(segment_fuzzy_params_to_grpc),
             }),
         };

@@ -121,8 +121,6 @@ message Match {
     FuzzyPhrase fuzzy_phrase = 12;
     // Match any word in the text with fuzzy (approximate) matching
     FuzzyTextAny fuzzy_text_any = 13;
-    // Match with fuzzy (approximate) matching using new format
-    Fuzzy fuzzy = 14;
   }
 }
 
@@ -158,20 +156,6 @@ message FuzzyTextAny {
   string text_any = 1;
   // Fuzzy matching parameters
   optional FuzzyParams params = 2;
-}
-
-// Unified Fuzzy match
-message Fuzzy {
-  oneof fuzzy_value {
-     // Text to match
-     string text = 1;
-     // Phrase to match
-     string phrase = 2;
-     // Text to match (any word)
-     string text_any = 3;
-  }
-  // Fuzzy matching parameters
-  optional FuzzyParams params = 4;
 }
 
 message RepeatedStrings {
