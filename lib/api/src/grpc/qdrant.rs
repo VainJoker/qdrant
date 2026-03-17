@@ -274,7 +274,7 @@ pub struct FieldCondition {
 pub struct Match {
     #[prost(
         oneof = "r#match::MatchValue",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13"
     )]
     pub match_value: ::core::option::Option<r#match::MatchValue>,
 }
@@ -323,9 +323,6 @@ pub mod r#match {
         /// Match any word in the text with fuzzy (approximate) matching
         #[prost(message, tag = "13")]
         FuzzyTextAny(super::FuzzyTextAny),
-        /// Match with fuzzy (approximate) matching using new format
-        #[prost(message, tag = "14")]
-        Fuzzy(super::Fuzzy),
     }
 }
 /// Parameters for fuzzy (approximate) matching
@@ -378,34 +375,6 @@ pub struct FuzzyTextAny {
     /// Fuzzy matching parameters
     #[prost(message, optional, tag = "2")]
     pub params: ::core::option::Option<FuzzyParams>,
-}
-/// Unified Fuzzy match
-#[derive(serde::Serialize)]
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct Fuzzy {
-    /// Fuzzy matching parameters
-    #[prost(message, optional, tag = "4")]
-    pub params: ::core::option::Option<FuzzyParams>,
-    #[prost(oneof = "fuzzy::FuzzyValue", tags = "1, 2, 3")]
-    pub fuzzy_value: ::core::option::Option<fuzzy::FuzzyValue>,
-}
-/// Nested message and enum types in `Fuzzy`.
-pub mod fuzzy {
-    #[derive(serde::Serialize)]
-    #[allow(clippy::derive_partial_eq_without_eq)]
-    #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum FuzzyValue {
-        /// Text to match
-        #[prost(string, tag = "1")]
-        Text(::prost::alloc::string::String),
-        /// Phrase to match
-        #[prost(string, tag = "2")]
-        Phrase(::prost::alloc::string::String),
-        /// Text to match (any word)
-        #[prost(string, tag = "3")]
-        TextAny(::prost::alloc::string::String),
-    }
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
