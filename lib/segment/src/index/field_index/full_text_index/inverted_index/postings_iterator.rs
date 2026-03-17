@@ -7,7 +7,7 @@ use crate::index::field_index::full_text_index::inverted_index::positions::{
     PartialDocument, Positions, TokenPosition,
 };
 use crate::index::field_index::full_text_index::inverted_index::{
-    Document, FuzzyDocument, TokenId, TokenSet,
+    Document, FuzzyDocument, TokenId,
 };
 
 pub fn intersect_postings_iterator<'a>(
@@ -236,8 +236,12 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
 
 /// Returns an iterator over points whose documents satisfy the fuzzy phrase query.
 ///
-/// Candidates are generated from the union of all expanded tokens across all phrase
-/// groups, then filtered by [`check_compressed_postings_fuzzy_phrase`].
+/// Candidates are generated from the group with the fewest total entries (most
+/// selective group).  A valid phrase match must contain at least one token from
+/// *every* group, so iterating the union of the smallest group's postings cannot
+/// miss any true matches.  Each candidate is then verified by
+/// [`check_compressed_postings_fuzzy_phrase`], which confirms that all groups are
+/// represented **and** that their tokens appear in the correct sequential order.
 pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
     phrase: FuzzyDocument,
     token_to_posting: impl Fn(&TokenId) -> Option<PostingListView<'a, Positions>> + 'a,
@@ -247,24 +251,44 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
         return Either::Left(std::iter::empty());
     }
 
-    // Union of all token IDs across all groups for candidate generation.
-    let unique_tokens: TokenSet = phrase
+    // Collect posting views for every phrase group up-front so we can:
+    //   (a) return early when any group has no matching posting (no match possible), and
+    //   (b) identify the most selective group to drive candidate iteration.
+    //
+    // We borrow `token_to_posting` here; the borrow ends after the outer `collect()`,
+    // which lets us move it into the filter closure below.
+    let mut group_postings: Vec<Vec<PostingListView<'a, Positions>>> = phrase
         .iter()
-        .flat_map(|group| group.tokens().iter().copied())
-        .collect();
+        .map(|group| {
+            group
+                .tokens()
+                .iter()
+                .filter_map(|&tid| token_to_posting(&tid))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
 
-    let posting_views: Vec<_> = unique_tokens
-        .tokens()
-        .iter()
-        .filter_map(|&tid| token_to_posting(&tid))
-        .collect();
-
-    if posting_views.is_empty() {
+    // If any group has no matching postings, no phrase can ever match.
+    if group_postings.iter().any(|views| views.is_empty()) {
         return Either::Left(std::iter::empty());
     }
 
+    // Pick the group with the fewest total entries as the primary candidate source.
+    // Because every phrase match must touch this group, we cannot miss any results.
+    let smallest_group_idx = group_postings
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, views)| views.iter().map(|v| v.len()).sum::<usize>())
+        .map(|(idx, _)| idx)
+        .unwrap(); // safe: group_postings is non-empty (phrase is non-empty and all groups have postings)
+
+    let candidate_views = group_postings.remove(smallest_group_idx);
+
+    // Iterate candidates (union of the smallest group's postings), then apply the full
+    // ordered phrase check: all groups must be present and their tokens must appear
+    // consecutively in the correct order.
     Either::Right(
-        merge_compressed_postings_iterator(posting_views, is_active).filter(move |&point_id| {
+        merge_compressed_postings_iterator(candidate_views, is_active).filter(move |&point_id| {
             check_compressed_postings_fuzzy_phrase(&phrase, point_id, &token_to_posting)
         }),
     )
