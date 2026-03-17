@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use common::types::PointOffsetType;
 
+use super::fuzzy_index::{FuzzyIndex, ImmutableFuzzyIndex};
 use super::inverted_index::InvertedIndex;
 use super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 #[cfg(feature = "rocksdb")]
@@ -22,6 +23,7 @@ use crate::index::payload_config::StorageType;
 
 pub struct ImmutableFullTextIndex {
     pub(super) inverted_index: ImmutableInvertedIndex,
+    pub(super) fuzzy_index: Option<ImmutableFuzzyIndex>,
     pub(super) tokenizer: Tokenizer,
     // Backing storage, source of state, persists deletions
     pub(super) storage: Storage,
@@ -57,8 +59,17 @@ impl ImmutableFullTextIndex {
 
         let mutable = MutableInvertedIndex::build_index(iter, phrase_matching)?;
 
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            use crate::index::field_index::full_text_index::fuzzy_index::MutableFuzzyIndex;
+            let mutable_fuzzy = MutableFuzzyIndex::build_index(mutable.vocab.keys().cloned());
+            Some(ImmutableFuzzyIndex::from(mutable_fuzzy))
+        } else {
+            None
+        };
+
         Ok(Some(Self {
             inverted_index: ImmutableInvertedIndex::from(mutable),
+            fuzzy_index,
             tokenizer,
             storage: Storage::RocksDb(db_wrapper),
         }))
@@ -67,6 +78,8 @@ impl ImmutableFullTextIndex {
     /// Open and load immutable full text index from mmap storage
     pub fn open_mmap(index: MmapFullTextIndex) -> Self {
         let inverted_index = ImmutableInvertedIndex::from(&index.inverted_index);
+
+        let fuzzy_index = index.fuzzy_index.as_ref().map(ImmutableFuzzyIndex::from);
 
         // ToDo(rocksdb): this is a duplication of tokenizer,
         // ToDo(rocksdb): But once the RocksDB is removed, we can always use the tokenizer from the index.
@@ -79,6 +92,7 @@ impl ImmutableFullTextIndex {
 
         Self {
             inverted_index,
+            fuzzy_index,
             storage: Storage::Mmap(Box::new(index)),
             tokenizer,
         }
@@ -153,6 +167,7 @@ impl ImmutableFullTextIndex {
     pub fn from_rocksdb_mutable(mutable: MutableFullTextIndex) -> Self {
         let MutableFullTextIndex {
             inverted_index,
+            fuzzy_index,
             config: _,
             tokenizer,
             storage,
@@ -164,11 +179,18 @@ impl ImmutableFullTextIndex {
             );
         };
 
+        let immutable_fuzzy = fuzzy_index.map(ImmutableFuzzyIndex::from);
+
         Self {
             inverted_index: ImmutableInvertedIndex::from(inverted_index),
+            fuzzy_index: immutable_fuzzy,
             tokenizer,
             storage: Storage::RocksDb(db),
         }
+    }
+
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index.as_ref().map(|f| f as &dyn FuzzyIndex)
     }
 
     pub fn storage_type(&self) -> StorageType {

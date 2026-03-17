@@ -2064,28 +2064,9 @@ impl TryFrom<Match> for segment::types::Match {
                 MatchValue::TextAny(text_any) => {
                     segment::types::Match::TextAny(segment::types::MatchTextAny { text_any })
                 }
-                MatchValue::FuzzyText(ft) => {
+                MatchValue::Fuzzy(fuzzy) => {
                     segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                        fuzzy: segment::types::Fuzzy::Text {
-                            text: ft.text,
-                            params: Some(grpc_fuzzy_params_to_segment(ft.params)),
-                        },
-                    })
-                }
-                MatchValue::FuzzyPhrase(fp) => {
-                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                        fuzzy: segment::types::Fuzzy::Phrase {
-                            phrase: fp.phrase,
-                            params: Some(grpc_fuzzy_params_to_segment(fp.params)),
-                        },
-                    })
-                }
-                MatchValue::FuzzyTextAny(fta) => {
-                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                        fuzzy: segment::types::Fuzzy::TextAny {
-                            text_any: fta.text_any,
-                            params: Some(grpc_fuzzy_params_to_segment(fta.params)),
-                        },
+                        fuzzy: grpc_fuzzy_match_to_segment(fuzzy)?,
                     })
                 }
             }),
@@ -2131,28 +2112,46 @@ impl From<segment::types::Match> for Match {
             segment::types::Match::TextAny(segment::types::MatchTextAny { text_any }) => {
                 MatchValue::TextAny(text_any)
             }
-            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                fuzzy: segment::types::Fuzzy::Text { text, params },
-            }) => MatchValue::FuzzyText(crate::grpc::FuzzyText {
-                text,
-                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
-            }),
-            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                fuzzy: segment::types::Fuzzy::Phrase { phrase, params },
-            }) => MatchValue::FuzzyPhrase(crate::grpc::FuzzyPhrase {
-                phrase,
-                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
-            }),
-            segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                fuzzy: segment::types::Fuzzy::TextAny { text_any, params },
-            }) => MatchValue::FuzzyTextAny(crate::grpc::FuzzyTextAny {
-                text_any,
-                params: params.as_ref().map(segment_fuzzy_params_to_grpc),
-            }),
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy { fuzzy }) => {
+                MatchValue::Fuzzy(segment_fuzzy_match_to_grpc(fuzzy))
+            }
         };
         Self {
             match_value: Some(match_value),
         }
+    }
+}
+
+fn grpc_fuzzy_match_to_segment(fuzzy: grpc::FuzzyMatch) -> Result<segment::types::Fuzzy, Status> {
+    let params = Some(grpc_fuzzy_params_to_segment(fuzzy.params));
+    match fuzzy.value {
+        Some(grpc::fuzzy_match::Value::Text(text)) => {
+            Ok(segment::types::Fuzzy::Text { text, params })
+        }
+        Some(grpc::fuzzy_match::Value::Phrase(phrase)) => {
+            Ok(segment::types::Fuzzy::Phrase { phrase, params })
+        }
+        Some(grpc::fuzzy_match::Value::TextAny(text_any)) => {
+            Ok(segment::types::Fuzzy::TextAny { text_any, params })
+        }
+        None => Err(Status::invalid_argument("Malformed fuzzy match condition")),
+    }
+}
+
+fn segment_fuzzy_match_to_grpc(fuzzy: segment::types::Fuzzy) -> grpc::FuzzyMatch {
+    match fuzzy {
+        segment::types::Fuzzy::Text { text, params } => grpc::FuzzyMatch {
+            value: Some(grpc::fuzzy_match::Value::Text(text)),
+            params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+        },
+        segment::types::Fuzzy::Phrase { phrase, params } => grpc::FuzzyMatch {
+            value: Some(grpc::fuzzy_match::Value::Phrase(phrase)),
+            params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+        },
+        segment::types::Fuzzy::TextAny { text_any, params } => grpc::FuzzyMatch {
+            value: Some(grpc::fuzzy_match::Value::TextAny(text_any)),
+            params: params.as_ref().map(segment_fuzzy_params_to_grpc),
+        },
     }
 }
 

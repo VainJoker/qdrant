@@ -32,8 +32,8 @@ use crate::index::payload_config::{
 };
 use crate::telemetry::PayloadIndexTelemetry;
 use crate::types::{
-    DateTimePayloadType, FieldCondition, FloatPayloadType, IntPayloadType, Match, MatchFuzzy,
-    MatchPhrase, MatchText, PayloadKeyType, RangeInterface, UuidIntType, UuidPayloadType,
+    DateTimePayloadType, FieldCondition, FloatPayloadType, IntPayloadType, Match, MatchPhrase,
+    MatchText, PayloadKeyType, RangeInterface, UuidIntType, UuidPayloadType,
 };
 
 pub trait PayloadFieldIndex {
