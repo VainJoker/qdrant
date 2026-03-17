@@ -10,11 +10,10 @@ use common::types::PointOffsetType;
 use parking_lot::RwLock;
 #[cfg(feature = "rocksdb")]
 use rocksdb::DB;
-use semver::Op;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::fuzzy_index::{FuzzyIndex, MutableFuzzyIndex};
+use super::fuzzy_index::FuzzyIndex;
 use super::immutable_text_index::ImmutableFullTextIndex;
 use super::inverted_index::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
@@ -219,45 +218,6 @@ impl FullTextIndex {
         }
     }
 
-    // pub(super) fn fuzzy_filter_query<'a>(
-    //     &'a self,
-    //     query: FuzzyParsedQuery,
-    //     hw_counter: &'a HardwareCounterCell,
-    // ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
-    //     match self {
-    //         Self::Mutable(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
-    //         Self::Immutable(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
-    //         Self::Mmap(index) => index.inverted_index.fuzzy_filter(query, hw_counter),
-    //     }
-    // }
-
-    // pub fn fuzzy_check_match(&self, query: &FuzzyParsedQuery, point_id: PointOffsetType) -> bool {
-    //     match self {
-    //         Self::Mutable(index) => index.inverted_index.fuzzy_check_match(query, point_id),
-    //         Self::Immutable(index) => index.inverted_index.fuzzy_check_match(query, point_id),
-    //         Self::Mmap(index) => index.inverted_index.fuzzy_check_match(query, point_id),
-    //     }
-    // }
-
-    // pub(super) fn fuzzy_estimate_query_cardinality(
-    //     &self,
-    //     query: &FuzzyParsedQuery,
-    //     condition: &FieldCondition,
-    //     hw_counter: &HardwareCounterCell,
-    // ) -> CardinalityEstimation {
-    //     match self {
-    //         Self::Mutable(index) => index
-    //             .inverted_index
-    //             .fuzzy_estimate_cardinality(query, condition, hw_counter),
-    //         Self::Immutable(index) => index
-    //             .inverted_index
-    //             .fuzzy_estimate_cardinality(query, condition, hw_counter),
-    //         Self::Mmap(index) => index
-    //             .inverted_index
-    //             .fuzzy_estimate_cardinality(query, condition, hw_counter),
-    //     }
-    // }
-
     pub fn values_count(&self, point_id: PointOffsetType) -> usize {
         match self {
             Self::Mutable(index) => index.inverted_index.values_count(point_id),
@@ -369,32 +329,16 @@ impl FullTextIndex {
         match_fuzzy: &MatchFuzzy,
         hw_counter: &HardwareCounterCell,
     ) -> Option<ParsedQuery> {
-        // Build a fuzzy index over the current vocabulary.
-        let mut fuzzy_index = MutableFuzzyIndex::build_index(
-            match self {
-                Self::Mutable(idx) => idx
-                    .inverted_index
-                    .vocab_with_postings_len_iter()
-                    .map(|(t, _)| t.to_owned())
-                    .collect::<Vec<_>>(),
-                Self::Immutable(idx) => idx
-                    .inverted_index
-                    .vocab_with_postings_len_iter()
-                    .map(|(t, _)| t.to_owned())
-                    .collect::<Vec<_>>(),
-                Self::Mmap(idx) => idx
-                    .inverted_index
-                    .vocab_with_postings_len_iter()
-                    .map(|(t, _)| t.to_owned())
-                    .collect::<Vec<_>>(),
-            }
-            .into_iter(),
-        );
-
         let default_fuzzy_params = FuzzyParams::default();
 
+        let fuzzy_index: &dyn FuzzyIndex = match self {
+            Self::Mutable(index) => index.get_fuzzy_index()?,
+            Self::Immutable(index) => index.get_fuzzy_index()?,
+            Self::Mmap(index) => index.get_fuzzy_index()?,
+        };
+
         // Expand a single query token: run fuzzy search, then resolve term → TokenId.
-        let mut expand_token = |token: &str, params: &FuzzyParams| -> AHashSet<TokenId> {
+        let expand_token = |token: &str, params: &FuzzyParams| -> AHashSet<TokenId> {
             let candidates = fuzzy_index.search(token, params);
             candidates
                 .into_iter()
@@ -579,40 +523,6 @@ impl FullTextIndex {
                 .is_some_and(|doc| fuzzy_doc.matches_document(&doc)),
         }
     }
-
-    // /// Checks the text directly against the payload value using fuzzy matching.
-    // /// This is the fallback path when the index is used for `special_check_condition`.
-    // pub fn check_payload_fuzzy_match(
-    //     &self,
-    //     payload_value: &serde_json::Value,
-    //     match_fuzzy: &MatchFuzzy,
-    //     hw_counter: &HardwareCounterCell,
-    // ) -> bool {
-    //     let query_opt = self.parse_fuzzy_query(match_fuzzy, hw_counter);
-
-    //     let Some(query) = query_opt else {
-    //         return false;
-    //     };
-
-    //     FullTextIndex::get_values(payload_value)
-    //         .iter()
-    //         .any(|value| match &query {
-    //             FuzzyParsedQuery::AllTokens(fuzzy_doc) => {
-    //                 let tokenset = self.parse_tokenset(value, hw_counter);
-    //                 fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
-    //             }
-    //             FuzzyParsedQuery::AnyTokens(q) => {
-    //                 let tokenset = self.parse_tokenset(value, hw_counter);
-    //                 tokenset.has_any(q)
-    //             }
-    //             FuzzyParsedQuery::Phrase(fuzzy_doc) => {
-    //                 let document = self.parse_document(value, hw_counter);
-    //                 document
-    //                     .map(|doc| fuzzy_doc.matches_document(&doc))
-    //                     .unwrap_or(false)
-    //             }
-    //         })
-    // }
 
     pub fn is_on_disk(&self) -> bool {
         match self {
@@ -810,10 +720,6 @@ impl PayloadFieldIndex for FullTextIndex {
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
     ) -> Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>> {
-        // if let Some(Match::Fuzzy(match_fuzzy)) = &condition.r#match {
-        //     let fuzzy_query = self.parse_fuzzy_query(match_fuzzy, hw_counter)?;
-        //     return Some(self.fuzzy_filter_query(fuzzy_query, hw_counter));
-        // }
 
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
@@ -836,24 +742,12 @@ impl PayloadFieldIndex for FullTextIndex {
         condition: &FieldCondition,
         hw_counter: &HardwareCounterCell,
     ) -> Option<CardinalityEstimation> {
-        // // Fuzzy queries use a separate dispatch path
-        // if let Some(Match::Fuzzy(match_fuzzy)) = &condition.r#match {
-        //     let fuzzy_query = self.parse_fuzzy_query(match_fuzzy, hw_counter);
-        //     let Some(fuzzy_query) = fuzzy_query else {
-        //         return Some(CardinalityEstimation::exact(0));
-        //     };
-        //     return Some(self.fuzzy_estimate_query_cardinality(
-        //         &fuzzy_query,
-        //         condition,
-        //         hw_counter,
-        //     ));
-        // }
-
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {
                 self.parse_phrase_query(phrase, hw_counter)
             }
+            Some(Match::Fuzzy(fuzzy)) => self.parse_fuzzy_query(fuzzy, hw_counter),
             _ => return None,
         };
 

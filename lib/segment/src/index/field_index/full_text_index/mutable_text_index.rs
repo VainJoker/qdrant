@@ -18,6 +18,7 @@ use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDeleteWrapper;
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::ValueIndexer;
+use crate::index::field_index::full_text_index::fuzzy_index::{FuzzyIndex, MutableFuzzyIndex};
 use crate::index::payload_config::StorageType;
 
 const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
@@ -29,6 +30,7 @@ const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
 
 pub struct MutableFullTextIndex {
     pub(super) inverted_index: MutableInvertedIndex,
+    pub(super) fuzzy_index: Option<MutableFuzzyIndex>,
     pub(super) config: TextIndexParams,
     pub(super) storage: Storage,
     pub(super) tokenizer: Tokenizer,
@@ -68,8 +70,15 @@ impl MutableFullTextIndex {
             Ok((idx, str_tokens))
         });
 
+        let inverted_index = MutableInvertedIndex::build_index(iter, phrase_matching)?;
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            Some(MutableFuzzyIndex::build_index(inverted_index.vocab.keys().map(|k| k.clone())))
+        } else {
+            None
+        };
         Ok(Some(Self {
-            inverted_index: MutableInvertedIndex::build_index(iter, phrase_matching)?,
+            inverted_index,
+            fuzzy_index,
             config,
             storage: Storage::RocksDb(db_wrapper),
             tokenizer,
@@ -126,8 +135,15 @@ impl MutableFullTextIndex {
                 ))
             })?;
 
+        let inverted_index = builder.build();
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            Some(MutableFuzzyIndex::build_index(inverted_index.vocab.keys().map(|k| k.clone())))
+        } else {
+            None
+        };
         Ok(Some(Self {
-            inverted_index: builder.build(),
+            inverted_index,
+            fuzzy_index,
             config,
             storage: Storage::Gridstore(store),
             tokenizer,
@@ -221,6 +237,11 @@ impl MutableFullTextIndex {
             });
         }
 
+        // Update fuzzy index with new token strings before registering
+        if let Some(fuzzy_index) = &mut self.fuzzy_index {
+            fuzzy_index.add_terms(str_tokens.iter().map(|t| t.to_string()).collect());
+        }
+
         let tokens = self.inverted_index.register_tokens(&str_tokens);
 
         let phrase_matching = self.config.phrase_matching.unwrap_or_default();
@@ -307,6 +328,10 @@ impl MutableFullTextIndex {
                 .unwrap()
                 .map(|bytes| FullTextIndex::deserialize_document(&bytes).unwrap()),
         }
+    }
+
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index.as_ref().map(|f| f as &dyn FuzzyIndex)
     }
 
     pub fn storage_type(&self) -> StorageType {

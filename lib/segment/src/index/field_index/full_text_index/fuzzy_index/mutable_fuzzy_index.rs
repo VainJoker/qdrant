@@ -8,7 +8,6 @@ pub struct MutableFuzzyIndex {
     terms: BTreeSet<String>,
 }
 
-#[allow(dead_code)]
 impl MutableFuzzyIndex {
     pub fn new() -> Self {
         Self {
