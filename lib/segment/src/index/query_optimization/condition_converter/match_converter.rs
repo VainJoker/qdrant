@@ -332,8 +332,7 @@ fn get_match_text_checker(
                     return Some(Box::new(|_| false));
                 };
                 Some(Box::new(move |point_id: PointOffsetType| {
-                    todo!()
-                    // full_text_index.fuzzy_check_match(&fuzzy_query, point_id)
+                    full_text_index.check_match(&fuzzy_query, point_id)
                 }))
             } else {
                 let query_opt = match query_type {

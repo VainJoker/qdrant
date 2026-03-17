@@ -44,7 +44,7 @@ impl Default for MutableFuzzyIndex {
 }
 
 impl FuzzyIndex for MutableFuzzyIndex {
-    fn search(&mut self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
+    fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
         let mut buckets: Vec<Vec<FuzzyCandidate>> =
             (0..=params.max_edits as u32).map(|_| Vec::new()).collect();

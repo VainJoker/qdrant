@@ -6,7 +6,7 @@ use itertools::Either;
 
 use super::posting_list::PostingList;
 use super::postings_iterator::{intersect_postings_iterator, merge_postings_iterator};
-use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::OperationResult;
 
 #[cfg_attr(test, derive(Clone))]
@@ -231,9 +231,42 @@ impl InvertedIndex for MutableInvertedIndex {
             ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens)),
             ParsedQuery::Phrase(phrase) => self.filter_has_phrase(phrase),
             ParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
-            ParsedQuery::FuzzyAllTokens(tokens) => todo!(),
-            ParsedQuery::FuzzyAnyTokens(tokens) => todo!(),
-            ParsedQuery::FuzzyPhrase(phrase) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                if fuzzy_doc.is_empty() {
+                    return Box::new(std::iter::empty());
+                }
+                let all_tokens: TokenSet = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+                let iter = self.filter_has_any(all_tokens).filter(move |&point_id| {
+                    let Some(doc) = self.get_tokens(point_id) else {
+                        return false;
+                    };
+                    fuzzy_doc.iter().all(|group| doc.has_any(group))
+                });
+                Box::new(iter)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                if fuzzy_doc.is_empty() {
+                    return Box::new(std::iter::empty());
+                }
+                let Some(point_to_doc) = self.point_to_doc.as_ref() else {
+                    return Box::new(std::iter::empty());
+                };
+                let all_tokens: TokenSet = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+                let iter = self.filter_has_any(all_tokens).filter(move |&point_id| {
+                    point_to_doc
+                        .get(point_id as usize)
+                        .and_then(|d| d.as_ref())
+                        .is_some_and(|doc| fuzzy_doc.matches_document(doc))
+                });
+                Box::new(iter)
+            }
         }
     }
 
@@ -275,9 +308,24 @@ impl InvertedIndex for MutableInvertedIndex {
                 // Check that at least one token is in document
                 doc.has_any(query)
             }
-            ParsedQuery::FuzzyAllTokens(document) => todo!(),
-            ParsedQuery::FuzzyAnyTokens(query) => todo!(),
-            ParsedQuery::FuzzyPhrase(document) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(query) => {
+                let Some(doc) = self.get_tokens(point_id) else {
+                    return false;
+                };
+                doc.has_any(query)
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                let Some(doc) = self.get_tokens(point_id) else {
+                    return false;
+                };
+                fuzzy_doc.iter().all(|group| doc.has_any(group))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                let Some(doc) = self.get_document(point_id) else {
+                    return false;
+                };
+                fuzzy_doc.matches_document(doc)
+            }
         }
     }
 
