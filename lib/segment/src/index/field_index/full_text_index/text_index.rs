@@ -720,7 +720,6 @@ impl PayloadFieldIndex for FullTextIndex {
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
     ) -> Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>> {
-
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {

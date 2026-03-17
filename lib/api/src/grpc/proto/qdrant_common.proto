@@ -115,12 +115,8 @@ message Match {
     string phrase = 9;
     // Match any word in the text
     string text_any = 10;
-    // Match text with fuzzy (approximate) matching
-    FuzzyText fuzzy_text = 11;
-    // Match phrase text with fuzzy (approximate) matching
-    FuzzyPhrase fuzzy_phrase = 12;
-    // Match any word in the text with fuzzy (approximate) matching
-    FuzzyTextAny fuzzy_text_any = 13;
+    // Match text, phrase text, or any word in the text with fuzzy (approximate) matching
+    FuzzyMatch fuzzy = 11;
   }
 }
 
@@ -135,27 +131,17 @@ message FuzzyParams {
 }
 
 // Fuzzy text match
-message FuzzyText {
-  // Text to match
-  string text = 1;
+message FuzzyMatch {
+  oneof value {
+    // Text to match
+    string text = 1;
+    // Phrase to match
+    string phrase = 2;
+    // Text (any word) to match
+    string text_any = 3;
+  }
   // Fuzzy matching parameters
-  optional FuzzyParams params = 2;
-}
-
-// Fuzzy phrase match
-message FuzzyPhrase {
-  // Phrase to match
-  string phrase = 1;
-  // Fuzzy matching parameters
-  optional FuzzyParams params = 2;
-}
-
-// Fuzzy text-any match
-message FuzzyTextAny {
-  // Text (any word) to match
-  string text_any = 1;
-  // Fuzzy matching parameters
-  optional FuzzyParams params = 2;
+  optional FuzzyParams params = 4;
 }
 
 message RepeatedStrings {

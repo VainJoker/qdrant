@@ -72,7 +72,9 @@ impl MutableFullTextIndex {
 
         let inverted_index = MutableInvertedIndex::build_index(iter, phrase_matching)?;
         let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
-            Some(MutableFuzzyIndex::build_index(inverted_index.vocab.keys().map(|k| k.clone())))
+            Some(MutableFuzzyIndex::build_index(
+                inverted_index.vocab.keys().map(|k| k.clone()),
+            ))
         } else {
             None
         };
@@ -137,7 +139,9 @@ impl MutableFullTextIndex {
 
         let inverted_index = builder.build();
         let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
-            Some(MutableFuzzyIndex::build_index(inverted_index.vocab.keys().map(|k| k.clone())))
+            Some(MutableFuzzyIndex::build_index(
+                inverted_index.vocab.keys().map(|k| k.clone()),
+            ))
         } else {
             None
         };

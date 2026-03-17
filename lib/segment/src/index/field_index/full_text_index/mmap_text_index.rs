@@ -231,8 +231,8 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
 
         let populate = !is_on_disk;
         let has_positions = config.phrase_matching.unwrap_or_default();
-        let inverted_index =
-            MmapInvertedIndex::open(path.clone(), populate, has_positions)?.ok_or_else(|| {
+        let inverted_index = MmapInvertedIndex::open(path.clone(), populate, has_positions)?
+            .ok_or_else(|| {
                 OperationError::service_error(
                     "Failed to open MmapInvertedIndex that was just created",
                 )
