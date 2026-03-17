@@ -18,14 +18,16 @@ use super::positions::Positions;
 use super::postings_iterator::{
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
 };
-use super::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::Flusher;
 use crate::common::mmap_bitslice_buffered_update_wrapper::MmapBitSliceBufferedUpdateWrapper;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::stored_bitslice::MmapBitSlice;
 use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
-    check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
+    check_compressed_postings_fuzzy_phrase, check_compressed_postings_phrase,
+    intersect_compressed_postings_fuzzy_phrase_iterator,
+    intersect_compressed_postings_phrase_iterator,
 };
 
 pub(super) mod mmap_postings;
@@ -461,9 +463,69 @@ impl InvertedIndex for MmapInvertedIndex {
             ParsedQuery::AllTokens(tokens) => self.filter_has_all(tokens),
             ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase)),
             ParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
-            ParsedQuery::FuzzyAllTokens(tokens) => todo!(),
-            ParsedQuery::FuzzyAnyTokens(tokens) => todo!(),
-            ParsedQuery::FuzzyPhrase(phrase) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                if fuzzy_doc.is_empty() {
+                    return Box::new(std::iter::empty());
+                }
+                let is_active = move |idx: PointOffsetType| self.is_active(idx);
+                let all_tokens: TokenSet = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+
+                fn filter_all_fuzzy<'a, V: MmapPostingValue>(
+                    postings: &'a MmapPostings<V>,
+                    all_tokens: TokenSet,
+                    fuzzy_doc: FuzzyDocument,
+                    is_active: impl Fn(PointOffsetType) -> bool + 'a,
+                ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+                    let views: Vec<_> = all_tokens
+                        .tokens()
+                        .iter()
+                        .filter_map(|&tid| postings.get(tid))
+                        .collect();
+                    if views.is_empty() {
+                        return Box::new(std::iter::empty());
+                    }
+                    Box::new(merge_compressed_postings_iterator(views, is_active).filter(
+                        move |&point_id| {
+                            fuzzy_doc.iter().all(|group| {
+                                group.tokens().iter().any(|&tid| {
+                                    postings
+                                        .get(tid)
+                                        .is_some_and(|pl| pl.visitor().contains(point_id))
+                                })
+                            })
+                        },
+                    ))
+                }
+
+                match &self.storage.postings {
+                    MmapPostingsEnum::Ids(postings) => {
+                        filter_all_fuzzy(postings, all_tokens, fuzzy_doc, is_active)
+                    }
+                    MmapPostingsEnum::WithPositions(postings) => {
+                        filter_all_fuzzy(postings, all_tokens, fuzzy_doc, is_active)
+                    }
+                }
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                if fuzzy_doc.is_empty() {
+                    return Box::new(std::iter::empty());
+                }
+                match &self.storage.postings {
+                    MmapPostingsEnum::Ids(_) => Box::new(std::iter::empty()),
+                    MmapPostingsEnum::WithPositions(postings) => {
+                        let is_active = move |idx: PointOffsetType| self.is_active(idx);
+                        Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
+                            fuzzy_doc,
+                            |tid| postings.get(*tid),
+                            is_active,
+                        ))
+                    }
+                }
+            }
         }
     }
 
@@ -489,9 +551,28 @@ impl InvertedIndex for MmapInvertedIndex {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
             ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
-            ParsedQuery::FuzzyAllTokens(fuzzy_document) => todo!(),
-            ParsedQuery::FuzzyAnyTokens(fuzzy_document) => todo!(),
-            ParsedQuery::FuzzyPhrase(fuzzy_document) => todo!(),
+            ParsedQuery::FuzzyAnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
+                    return false;
+                }
+                fuzzy_doc
+                    .iter()
+                    .all(|group| self.check_has_any(group, point_id))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                if !self.is_active(point_id) {
+                    return false;
+                }
+                match &self.storage.postings {
+                    MmapPostingsEnum::Ids(_) => false,
+                    MmapPostingsEnum::WithPositions(postings) => {
+                        check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
+                            postings.get(*tid)
+                        })
+                    }
+                }
+            }
         }
     }
 
