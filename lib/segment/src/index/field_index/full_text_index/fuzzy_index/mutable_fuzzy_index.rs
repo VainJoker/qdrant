@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use levenshtein::levenshtein;
+
 use super::FuzzyIndex;
 use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use crate::types::FuzzyParams;
@@ -60,11 +62,12 @@ impl FuzzyIndex for MutableFuzzyIndex {
                 }
             }
 
-            if let Some(distance) = levenshtein_distance(query, term, params.max_edits as u32) {
-                buckets[distance as usize].push(FuzzyCandidate::new(
+            let dist = levenshtein(query, term) as u32;
+            if dist <= params.max_edits as u32 {
+                buckets[dist as usize].push(FuzzyCandidate::new(
                     term.to_string(),
                     query.len(),
-                    distance,
+                    dist,
                 ));
                 total += 1;
                 if total >= max {
@@ -77,38 +80,4 @@ impl FuzzyIndex for MutableFuzzyIndex {
         results.truncate(max);
         results
     }
-}
-
-fn levenshtein_distance(a: &str, b: &str, max_dist: u32) -> Option<u32> {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let la = a.len();
-    let lb = b.len();
-
-    if la.abs_diff(lb) as u32 > max_dist {
-        return None;
-    }
-
-    let mut prev: Vec<u32> = (0..=(lb as u32)).collect();
-    let mut curr: Vec<u32> = vec![0; lb + 1];
-
-    for i in 1..=la {
-        curr[0] = i as u32;
-        let mut row_min = curr[0];
-
-        for j in 1..=lb {
-            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
-            curr[j] = (prev[j - 1] + cost).min(prev[j] + 1).min(curr[j - 1] + 1);
-            row_min = row_min.min(curr[j]);
-        }
-
-        if row_min > max_dist {
-            return None;
-        }
-
-        std::mem::swap(&mut prev, &mut curr);
-    }
-
-    let dist = prev[lb];
-    if dist <= max_dist { Some(dist) } else { None }
 }
