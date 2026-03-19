@@ -122,6 +122,7 @@ impl MmapFullTextIndex {
 pub struct FullTextMmapIndexBuilder {
     path: PathBuf,
     mutable_index: MutableInvertedIndex,
+    mutable_fuzzy_index: Option<MutableFuzzyIndex>,
     config: TextIndexParams,
     is_on_disk: bool,
     tokenizer: Tokenizer,
@@ -130,10 +131,16 @@ pub struct FullTextMmapIndexBuilder {
 impl FullTextMmapIndexBuilder {
     pub fn new(path: PathBuf, config: TextIndexParams, is_on_disk: bool) -> Self {
         let with_positions = config.phrase_matching.unwrap_or_default();
+        let mutable_fuzzy_index = if config.fuzzy_matching.unwrap_or(false) {
+            Some(MutableFuzzyIndex::new())
+        } else {
+            None
+        };
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
         Self {
             path,
             mutable_index: MutableInvertedIndex::new(with_positions),
+            mutable_fuzzy_index,
             config,
             is_on_disk,
             tokenizer,
@@ -167,6 +174,10 @@ impl ValueIndexer for FullTextMmapIndexBuilder {
             self.tokenizer.tokenize_doc(value, |token| {
                 str_tokens.push(token);
             });
+        }
+
+        if let Some(fuzzy_index) = &mut self.mutable_fuzzy_index {
+            fuzzy_index.add_terms(str_tokens.iter().map(|t| t.to_string()).collect());
         }
 
         let tokens = self.mutable_index.register_tokens(&str_tokens);
@@ -210,24 +221,25 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
         let Self {
             path,
             mutable_index,
+            mutable_fuzzy_index,
             config,
             is_on_disk,
             tokenizer,
         } = self;
 
         let immutable = ImmutableInvertedIndex::from(mutable_index);
+        let immutable_fuzzy_index = match mutable_fuzzy_index {
+            Some(index) => {
+                let immutable_index = ImmutableFuzzyIndex::try_from(index)?;
+                MmapFuzzyIndex::create(path.clone(), &immutable_index)?;
+                Some(immutable_index)
+            }
+            None => None,
+        };
 
         fs::create_dir_all(path.as_path())?;
 
         MmapInvertedIndex::create(path.clone(), &immutable)?;
-
-        // Build fuzzy index if enabled
-        let enable_fuzzy = config.fuzzy_matching.unwrap_or_default();
-        if enable_fuzzy {
-            let mutable_fuzzy = MutableFuzzyIndex::build_index(immutable.vocab.keys().cloned());
-            let immutable_fuzzy = ImmutableFuzzyIndex::from(mutable_fuzzy);
-            MmapFuzzyIndex::create(path.clone(), &immutable_fuzzy)?;
-        }
 
         let populate = !is_on_disk;
         let has_positions = config.phrase_matching.unwrap_or_default();
@@ -238,6 +250,7 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
                 )
             })?;
 
+        let enable_fuzzy = config.fuzzy_matching.unwrap_or(false);
         let fuzzy_index = MmapFuzzyIndex::open(path, populate, enable_fuzzy)
             .ok()
             .flatten();
@@ -251,13 +264,9 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
         let text_index = if is_on_disk {
             FullTextIndex::Mmap(Box::new(mmap_index))
         } else {
-            let immutable_fuzzy = mmap_index
-                .fuzzy_index
-                .as_ref()
-                .map(ImmutableFuzzyIndex::from);
             FullTextIndex::Immutable(ImmutableFullTextIndex {
                 inverted_index: immutable,
-                fuzzy_index: immutable_fuzzy,
+                fuzzy_index: immutable_fuzzy_index,
                 tokenizer,
                 storage: Storage::Mmap(Box::new(mmap_index)),
             })
