@@ -81,6 +81,12 @@ message SparseVectorParams {
   optional SparseIndexConfig index = 1;
   // If set - apply modifier to the vector values
   optional Modifier modifier = 2;
+  // If set - enables fuzzy term expansion using the specified payload field's full-text index
+  optional FuzzySearchConfig fuzzy = 3;
+}
+
+message FuzzySearchConfig {
+  string fuzzy_bind_field = 1;
 }
 
 message SparseVectorConfig {
