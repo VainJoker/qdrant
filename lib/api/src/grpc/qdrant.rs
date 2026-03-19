@@ -593,6 +593,16 @@ pub struct SparseVectorParams {
     /// If set - apply modifier to the vector values
     #[prost(enumeration = "Modifier", optional, tag = "2")]
     pub modifier: ::core::option::Option<i32>,
+    /// If set - enables fuzzy term expansion using the specified payload field's full-text index
+    #[prost(message, optional, tag = "3")]
+    pub fuzzy: ::core::option::Option<FuzzySearchConfig>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzySearchConfig {
+    #[prost(string, tag = "1")]
+    pub fuzzy_bind_field: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -5647,6 +5657,23 @@ pub struct SearchParams {
     #[prost(message, optional, tag = "5")]
     #[validate(nested)]
     pub acorn: ::core::option::Option<AcornSearchParams>,
+    /// Fuzzy sparse search params
+    #[prost(message, optional, tag = "6")]
+    pub fuzzy: ::core::option::Option<FuzzySearchParams>,
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzySearchParams {
+    /// Max Levenshtein edit distance (0..=2). Default: 1
+    #[prost(uint32, optional, tag = "1")]
+    pub max_edits: ::core::option::Option<u32>,
+    /// Number of initial characters that must match exactly. Default: 0
+    #[prost(uint32, optional, tag = "2")]
+    pub prefix_length: ::core::option::Option<u32>,
+    /// Max number of similar terms to collect per query token. Default: 30
+    #[prost(uint32, optional, tag = "3")]
+    pub max_expansions: ::core::option::Option<u32>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
