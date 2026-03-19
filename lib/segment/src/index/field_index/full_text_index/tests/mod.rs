@@ -1,12 +1,16 @@
 mod test_congruence;
 
+use std::collections::HashSet;
+
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
-use tempfile::Builder;
+use tempfile::{Builder, TempDir};
 
 use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
+use crate::index::field_index::full_text_index::inverted_index::ParsedQuery;
 use crate::index::field_index::full_text_index::text_index::FullTextIndex;
 use crate::index::field_index::{FieldIndexBuilderTrait as _, ValueIndexer};
+use crate::types::{Fuzzy, FuzzyParams, MatchFuzzy};
 
 fn movie_titles() -> Vec<String> {
     vec![
@@ -310,6 +314,308 @@ fn test_phrase_matching() {
 
     check_matching(mutable_index);
     check_matching(mmap_index);
+}
+
+#[test]
+fn test_fuzzy_search_suite() {
+    const DOCS: &[(u32, &str)] = &[
+        (0, "quickly sapphire falcon glides"),
+        (1, "quickly amber rabbit hops"),
+        (2, "slowly crimson falcon sleeps"),
+        (3, "gentle bronze badger rests"),
+        (4, "quick fox jumps"),
+        (5, "quirk bug appears"),
+        (6, "quack duck swims"),
+        (7, "falcon sapphire quickly"),
+        (8, "cat"),
+        (9, "bat"),
+        (10, "rat"),
+        (11, "mat"),
+        (12, "hat"),
+        (13, "the cat sat on the mat"),
+        (14, "slyly crimson falcon"),
+        (15, "unrelated document here"),
+        (16, "quickly"),
+    ];
+
+    let hw_counter = HardwareCounterCell::default();
+
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        lowercase: Some(true),
+        ..Default::default()
+    };
+
+    let dir0 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir1 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir2 = Builder::new().prefix("test_dir").tempdir().unwrap();
+
+    let mut mutable = FullTextIndex::builder_gridstore(dir0.path().to_path_buf(), config.clone())
+        .make_empty()
+        .unwrap();
+    assert!(matches!(mutable, FullTextIndex::Mutable(_)));
+
+    let mut immutable_b =
+        FullTextIndex::builder_mmap(dir1.path().to_path_buf(), config.clone(), false);
+    immutable_b.init().unwrap();
+
+    let mut mmap_b = FullTextIndex::builder_mmap(dir2.path().to_path_buf(), config, true);
+    mmap_b.init().unwrap();
+
+    for (id, text) in DOCS {
+        let v = text.to_string();
+        mutable.add_many(*id, vec![v.clone()], &hw_counter).unwrap();
+        immutable_b
+            .add_many(*id, vec![v.clone()], &hw_counter)
+            .unwrap();
+        mmap_b.add_many(*id, vec![v], &hw_counter).unwrap();
+    }
+
+    let immutable = immutable_b.finalize().unwrap();
+    assert!(matches!(immutable, FullTextIndex::Immutable(_)));
+    let mmap = mmap_b.finalize().unwrap();
+    assert!(matches!(mmap, FullTextIndex::Mmap(_)));
+
+    let indices = [
+        ("mutable", &mutable),
+        ("immutable", &immutable),
+        ("mmap", &mmap),
+    ];
+
+    macro_rules! fp {
+        ($e:expr, $p:expr, $x:expr) => {
+            Some(FuzzyParams {
+                max_edits: $e,
+                prefix_length: $p,
+                max_expansions: $x,
+            })
+        };
+    }
+
+    // (name, fuzzy, expected_ids)
+    // expected_ids = None  → parse_fuzzy_query must return None
+    // expected_ids = Some(&[]) with ExpansionsAtMost handled separately below
+    type MaybeIds = Option<&'static [u32]>;
+    let cases: &[(&str, Fuzzy, MaybeIds)] = &[
+        // ── Text: all tokens must match ───────────────────────────────────────
+        (
+            "text_all_tokens_positive",
+            Fuzzy::Text {
+                text: "quikly saphire falcon".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 7]),
+        ),
+        (
+            "text_all_tokens_one_missing_in_corpus",
+            Fuzzy::Text {
+                text: "quikly saphire zzzzzzzz".into(),
+                params: fp!(1, 0, 50),
+            },
+            None,
+        ),
+        // ── Edit-distance ceiling ─────────────────────────────────────────────
+        (
+            "two_edit_distance_not_matched",
+            Fuzzy::Text {
+                text: "slyly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[14]),
+        ),
+        (
+            "edit_zero_no_fuzzy_noise",
+            Fuzzy::Text {
+                text: "quickly sapphire falcon".into(),
+                params: fp!(0, 0, 50),
+            },
+            Some(&[0, 7]),
+        ),
+        (
+            "edit_zero_rejects_one_edit_neighbours",
+            Fuzzy::Text {
+                text: "quikly".into(),
+                params: fp!(0, 0, 50),
+            },
+            None,
+        ),
+        // ── prefix_length guard ───────────────────────────────────────────────
+        (
+            "prefix2_permissive_includes_quack",
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 2, 50),
+            },
+            Some(&[4, 5, 6]),
+        ),
+        (
+            "prefix3_blocks_quack",
+            // "qui" ≠ "qua" → quack filtered even though edit_dist("quick","quack")=1
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 3, 50),
+            },
+            Some(&[4, 5]),
+        ),
+        (
+            "prefix_exceeds_term_length_degrades_to_exact",
+            Fuzzy::Text {
+                text: "cat".into(),
+                params: fp!(1, 99, 50),
+            },
+            Some(&[8, 13]),
+        ),
+        // ── Phrase: token order matters ───────────────────────────────────────
+        (
+            "phrase_correct_order_matches",
+            // doc7 has same tokens but reversed → absent
+            Fuzzy::Phrase {
+                phrase: "quikly saphire falcon".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0]),
+        ),
+        (
+            "phrase_reversed_order_matches_only_reversed_doc",
+            Fuzzy::Phrase {
+                phrase: "falcon saphire quikly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[7]),
+        ),
+        (
+            "phrase_fuzzy_bridging_non_adjacent_tokens",
+            // "sat" is 1-edit from "mat", so "cat sat" is an adjacent window in doc13
+            Fuzzy::Phrase {
+                phrase: "cat mat".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[13]),
+        ),
+        (
+            "phrase_fuzzy_bridging_non_adjacent_tokens_with_prefix_guard",
+            Fuzzy::Phrase {
+                phrase: "cat mat".into(),
+                params: fp!(1, 1, 50),
+            },
+            Some(&[]),
+        ),
+        // ── TextAny: any token suffices ───────────────────────────────────────
+        (
+            "text_any_one_token_matches",
+            // "quikly"→{0,1,7,16}  "sloly"→slowly,slyly→{2,14}
+            Fuzzy::TextAny {
+                text_any: "quikly sloly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 1, 2, 7, 14, 16]),
+        ),
+        (
+            "text_any_no_tokens_match",
+            Fuzzy::TextAny {
+                text_any: "zzzzzz qqqqqq".into(),
+                params: fp!(1, 0, 50),
+            },
+            None,
+        ),
+        (
+            "text_any_failing_token_does_not_pollute_results",
+            // "zzzzzz" → nothing; result must equal the "quickly" set exactly
+            Fuzzy::TextAny {
+                text_any: "quickly zzzzzz".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 1, 7, 16]),
+        ),
+        // ── Token-boundary / substring guard ─────────────────────────────────
+        (
+            "prefix_substring_not_confused_with_fuzzy",
+            // edit_dist("quick","quickly")=2 → must NOT match at max_edits=1
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[4, 5, 6]),
+        ),
+    ];
+
+    // max_expansions cap — checked separately (result set is implementation-dependent)
+    let expansion_cases: &[(&str, Fuzzy, usize)] = &[(
+        "max_expansions_caps_expansion_count",
+        Fuzzy::Text {
+            text: "cat".into(),
+            params: fp!(1, 0, 2),
+        },
+        2,
+    )];
+
+    for (name, fuzzy, expected_ids) in cases {
+        for (iname, index) in &indices {
+            let maybe_parsed = index.parse_fuzzy_query(
+                &MatchFuzzy {
+                    fuzzy: fuzzy.clone(),
+                },
+                &hw_counter,
+            );
+
+            let Some(parsed) = maybe_parsed else {
+                if expected_ids.map_or(true, |ids| ids.is_empty()) {
+                    continue;
+                }
+                panic!("[{name}|{iname}] parse returned None but expected non-empty results");
+            };
+
+            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).collect();
+
+            for (point_id, _) in DOCS {
+                let via_check = index.check_match(&parsed, *point_id);
+                let via_filter = actual.contains(point_id);
+                assert_eq!(
+                    via_check, via_filter,
+                    "[{name}|{iname}] check_match/filter_query disagree at doc {point_id}: \
+                     filter={via_filter} check={via_check}"
+                );
+            }
+
+            if let Some(ids) = expected_ids {
+                let expected: HashSet<u32> = ids.iter().copied().collect();
+                assert_eq!(
+                    actual,
+                    expected,
+                    "[{name}|{iname}]\n  missing={:?}\n  extra={:?}",
+                    expected.difference(&actual).collect::<Vec<_>>(),
+                    actual.difference(&expected).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    for (name, fuzzy, max) in expansion_cases {
+        for (iname, index) in &indices {
+            let Some(parsed) = index.parse_fuzzy_query(
+                &MatchFuzzy {
+                    fuzzy: fuzzy.clone(),
+                },
+                &hw_counter,
+            ) else {
+                panic!("[{name}|{iname}] parse returned None");
+            };
+            let count = match parsed {
+                ParsedQuery::FuzzyAllTokens(g) | ParsedQuery::FuzzyPhrase(g) => {
+                    g.iter().map(|g| g.len()).sum()
+                }
+                ParsedQuery::FuzzyAnyTokens(t) => t.len(),
+                _ => panic!("expected fuzzy query, got {parsed:?}"),
+            };
+            assert!(
+                count <= *max,
+                "expected at most {max} expanded terms, got {count}"
+            );
+        }
+    }
 }
 
 #[test]
