@@ -62,11 +62,16 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
     }
 }
 
-impl From<MutableFuzzyIndex> for ImmutableFuzzyIndex {
-    fn from(value: MutableFuzzyIndex) -> Self {
-        // use a unwrap here may not fit, change it in the future
-        let index = Set::from_iter(value.get_terms()).unwrap();
-        Self { index }
+impl TryFrom<MutableFuzzyIndex> for ImmutableFuzzyIndex {
+    type Error = crate::common::operation_error::OperationError;
+
+    fn try_from(value: MutableFuzzyIndex) -> Result<Self, Self::Error> {
+        let index = Set::from_iter(value.get_terms()).map_err(|e| {
+            crate::common::operation_error::OperationError::service_error(format!(
+                "Failed to build fuzzy index from MutableFuzzyIndex: {e}"
+            ))
+        })?;
+        Ok(Self { index })
     }
 }
 
