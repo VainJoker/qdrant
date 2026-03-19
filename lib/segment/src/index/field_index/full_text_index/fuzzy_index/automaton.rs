@@ -5,8 +5,8 @@ use fst::Automaton;
 use fst::automaton::Levenshtein;
 
 pub struct PrefixLevenshtein {
-    pub(crate) prefix: Vec<u8>,
-    pub(crate) lev: Levenshtein,
+    prefix: Vec<u8>,
+    lev: Levenshtein,
 }
 
 impl PrefixLevenshtein {
