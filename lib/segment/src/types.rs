@@ -2485,7 +2485,7 @@ pub struct FuzzyParams {
     pub prefix_length: u8,
     /// Max number of similar terms to collect per query token. Default: 30.
     #[serde(default = "FuzzyParams::default_max_expansions")]
-    pub max_expansions: u32,
+    pub max_expansions: u8,
 }
 
 impl Default for FuzzyParams {
@@ -2500,7 +2500,7 @@ impl Default for FuzzyParams {
 
 impl FuzzyParams {
     pub const MAX_EDITS_DISTANCE: u8 = 2;
-    pub const MAX_EXPANSIONS_CAP: u32 = 30;
+    pub const MAX_EXPANSIONS_CAP: u8 = 30;
 
     fn default_max_edits_distance() -> u8 {
         1
@@ -2510,7 +2510,7 @@ impl FuzzyParams {
         0
     }
 
-    fn default_max_expansions() -> u32 {
+    fn default_max_expansions() -> u8 {
         30
     }
 
