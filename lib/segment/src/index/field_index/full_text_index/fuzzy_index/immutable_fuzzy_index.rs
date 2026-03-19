@@ -75,10 +75,16 @@ impl TryFrom<MutableFuzzyIndex> for ImmutableFuzzyIndex {
     }
 }
 
-impl From<&MmapFuzzyIndex> for ImmutableFuzzyIndex {
-    fn from(value: &MmapFuzzyIndex) -> Self {
+impl TryFrom<&MmapFuzzyIndex> for ImmutableFuzzyIndex {
+    type Error = crate::common::operation_error::OperationError;
+
+    fn try_from(value: &MmapFuzzyIndex) -> Result<Self, Self::Error> {
         let bytes = value.fst_bytes().to_vec();
-        let index = Set::new(bytes).unwrap();
-        Self { index }
+        let index = Set::new(bytes).map_err(|e| {
+            crate::common::operation_error::OperationError::service_error(format!(
+                "Failed to build fuzzy index from MmapFuzzyIndex: {e}"
+            ))
+        })?;
+        Ok(Self { index })
     }
 }
