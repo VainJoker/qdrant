@@ -637,7 +637,7 @@ impl FieldIndexBuilderTrait for FullTextIndexRocksDbBuilder {
         }
 
         Ok(FullTextIndex::Immutable(
-            ImmutableFullTextIndex::from_rocksdb_mutable(self.mutable_index),
+            ImmutableFullTextIndex::from_rocksdb_mutable(self.mutable_index)?,
         ))
     }
 }
