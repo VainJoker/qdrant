@@ -62,7 +62,7 @@ impl ImmutableFullTextIndex {
         let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
             use crate::index::field_index::full_text_index::fuzzy_index::MutableFuzzyIndex;
             let mutable_fuzzy = MutableFuzzyIndex::build_index(mutable.vocab.keys().cloned());
-            Some(ImmutableFuzzyIndex::from(mutable_fuzzy))
+            Some(ImmutableFuzzyIndex::try_from(mutable_fuzzy)?)
         } else {
             None
         };
@@ -79,7 +79,15 @@ impl ImmutableFullTextIndex {
     pub fn open_mmap(index: MmapFullTextIndex) -> Self {
         let inverted_index = ImmutableInvertedIndex::from(&index.inverted_index);
 
-        let fuzzy_index = index.fuzzy_index.as_ref().map(ImmutableFuzzyIndex::from);
+        let fuzzy_index = index.fuzzy_index.as_ref().and_then(|fuzzy| {
+            match ImmutableFuzzyIndex::try_from(fuzzy) {
+                Ok(index) => Some(index),
+                Err(err) => {
+                    log::warn!("Failed to load immutable fuzzy index from mmap: {err}");
+                    None
+                }
+            }
+        });
 
         // ToDo(rocksdb): this is a duplication of tokenizer,
         // ToDo(rocksdb): But once the RocksDB is removed, we can always use the tokenizer from the index.
@@ -164,7 +172,7 @@ impl ImmutableFullTextIndex {
     }
 
     #[cfg(feature = "rocksdb")]
-    pub fn from_rocksdb_mutable(mutable: MutableFullTextIndex) -> Self {
+    pub fn from_rocksdb_mutable(mutable: MutableFullTextIndex) -> OperationResult<Self> {
         let MutableFullTextIndex {
             inverted_index,
             fuzzy_index,
@@ -179,14 +187,14 @@ impl ImmutableFullTextIndex {
             );
         };
 
-        let immutable_fuzzy = fuzzy_index.map(ImmutableFuzzyIndex::from);
+        let immutable_fuzzy = fuzzy_index.map(ImmutableFuzzyIndex::try_from).transpose()?;
 
-        Self {
+        Ok(Self {
             inverted_index: ImmutableInvertedIndex::from(inverted_index),
             fuzzy_index: immutable_fuzzy,
             tokenizer,
             storage: Storage::RocksDb(db),
-        }
+        })
     }
 
     pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
