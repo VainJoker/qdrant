@@ -352,6 +352,18 @@ impl Collection {
         self.collection_config.read().await.uuid
     }
 
+    /// Get the fuzzy bind field for a sparse vector, if configured.
+    pub async fn get_fuzzy_bind_field(&self, vector_name: &str) -> Option<String> {
+        let config = self.collection_config.read().await;
+        config
+            .params
+            .sparse_vectors
+            .as_ref()
+            .and_then(|sv_map| sv_map.get(vector_name))
+            .and_then(|sv| sv.fuzzy.as_ref())
+            .map(|fc| fc.fuzzy_bind_field.clone())
+    }
+
     pub async fn get_sharding_method_and_keys(&self) -> (ShardingMethod, Vec<ShardKey>) {
         let shards_holder = self.shards_holder.read().await;
 

@@ -138,6 +138,7 @@ impl PySearchParams {
             quantization: quantization.map(QuantizationSearchParams::from),
             indexed_only,
             acorn: acorn.map(AcornSearchParams::from),
+            fuzzy: None,
         })
     }
 
@@ -180,6 +181,7 @@ impl PySearchParams {
             quantization: _,
             indexed_only: _,
             acorn: _,
+            fuzzy: _,
         } = self.0;
     }
 }

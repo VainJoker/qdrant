@@ -18,7 +18,8 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::TryStreamExt as _;
 use futures::stream::FuturesUnordered;
 use segment::data_types::facets::{FacetParams, FacetResponse};
-use segment::types::{ScoredPoint, ShardKey};
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::types::{FuzzyParams, ScoredPoint, ShardKey};
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
 use shard::search::CoreSearchRequestBatch;
@@ -407,6 +408,41 @@ impl TableOfContent {
                 request,
                 shard_selection,
                 read_consistency,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await
+            .map_err(StorageError::from)
+    }
+
+    /// Get fuzzy candidates from collection's FST indexes.
+    /// Used by the fuzzy expand handler before BM25 inference.
+    pub async fn get_fuzzy_candidates(
+        &self,
+        collection_name: &str,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        auth: Auth,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> StorageResult<Vec<FuzzyCandidate>> {
+        use crate::rbac::AccessRequirements;
+        let collection_pass = auth.check_collection_access(
+            collection_name,
+            AccessRequirements::new(),
+            "get_fuzzy_candidates",
+        )?;
+
+        let collection = self.get_collection(&collection_pass).await?;
+
+        let shard_selection = ShardSelectorInternal::All;
+        collection
+            .get_fuzzy_candidates(
+                bind_field,
+                text,
+                params,
+                &shard_selection,
                 timeout,
                 hw_measurement_acc,
             )

@@ -30,8 +30,10 @@ use segment::common::operation_time_statistics::{
 };
 use segment::data_types::facets::{FacetParams, FacetResponse, FacetValueHit};
 use segment::data_types::order_by::OrderBy;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use segment::types::{
-    ExtendedPointId, Filter, ScoredPoint, WithPayload, WithPayloadInterface, WithVector,
+    ExtendedPointId, Filter, FuzzyParams, ScoredPoint, WithPayload, WithPayloadInterface,
+    WithVector,
 };
 use semver::Version;
 use shard::count::CountRequestInternal;
@@ -1450,6 +1452,60 @@ impl ShardOperation for RemoteShard {
         timer.set_success(true);
 
         Ok(result)
+    }
+
+    async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        _search_runtime_handle: &Handle,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+        let processed_timeout = Self::process_read_timeout(timeout, "get_fuzzy_candidates")?;
+        let mut timer = ScopeDurationMeasurer::new(&self.telemetry_search_durations);
+        timer.set_success(false);
+
+        let response = self
+            .with_points_client(|mut client| async move {
+                let request = &api::grpc::qdrant::GetFuzzyCandidatesInternal {
+                    collection_name: self.collection_id.clone(),
+                    shard_id: self.id,
+                    bind_field: bind_field.to_string(),
+                    text: text.to_string(),
+                    max_edits: u32::from(params.max_edits),
+                    prefix_length: u32::from(params.prefix_length),
+                    max_expansions: u32::from(params.max_expansions),
+                    timeout: processed_timeout.map(|t| t.as_secs()),
+                };
+
+                let mut request = tonic::Request::new(request.clone());
+
+                if let Some(timeout) = timeout {
+                    request.set_timeout(timeout);
+                }
+
+                client.get_fuzzy_candidates(request).await
+            })
+            .await?
+            .into_inner();
+
+        if let Some(hw_usage) = response.usage {
+            hw_measurement_acc.accumulate_request(hw_usage);
+        }
+
+        let candidates = response
+            .candidates
+            .into_iter()
+            .map(|c| FuzzyCandidate {
+                term: c.term,
+                weight: c.weight,
+            })
+            .collect();
+
+        timer.set_success(true);
+        Ok(candidates)
     }
 
     async fn stop_gracefully(self) {

@@ -243,6 +243,14 @@ impl FieldIndex {
         self.get_payload_field_index().count_indexed_points()
     }
 
+    /// Returns a reference to the FullTextIndex if this field index is a full-text index.
+    pub fn as_full_text_index(&self) -> Option<&FullTextIndex> {
+        match self {
+            FieldIndex::FullTextIndex(index) => Some(index),
+            _ => None,
+        }
+    }
+
     pub fn flusher(&self) -> Flusher {
         self.get_payload_field_index().flusher()
     }

@@ -171,11 +171,20 @@ impl FullTextIndex {
         }
     }
 
-    fn get_tokenizer(&self) -> &Tokenizer {
+    pub fn get_tokenizer(&self) -> &Tokenizer {
         match self {
             Self::Mutable(index) => &index.tokenizer,
             Self::Immutable(index) => &index.tokenizer,
             Self::Mmap(index) => &index.tokenizer,
+        }
+    }
+
+    /// Returns a reference to the fuzzy index if available (fuzzy_matching is enabled).
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        match self {
+            Self::Mutable(index) => index.get_fuzzy_index(),
+            Self::Immutable(index) => index.get_fuzzy_index(),
+            Self::Mmap(index) => index.get_fuzzy_index(),
         }
     }
 

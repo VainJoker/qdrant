@@ -11124,6 +11124,63 @@ pub struct FacetResponseInternal {
     #[prost(message, optional, tag = "3")]
     pub usage: ::core::option::Option<HardwareUsage>,
 }
+/// Request to get fuzzy candidates from a shard's payload field FST index
+#[derive(serde::Serialize)]
+#[derive(validator::Validate)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFuzzyCandidatesInternal {
+    #[prost(string, tag = "1")]
+    #[validate(
+        length(min = 1, max = 255),
+        custom(function = "common::validation::validate_collection_name_legacy")
+    )]
+    pub collection_name: ::prost::alloc::string::String,
+    #[prost(uint32, tag = "2")]
+    pub shard_id: u32,
+    /// Payload field name with full-text index (fuzzy_matching: true)
+    #[prost(string, tag = "3")]
+    #[validate(length(min = 1))]
+    pub bind_field: ::prost::alloc::string::String,
+    /// Raw query text to tokenize and find fuzzy matches for
+    #[prost(string, tag = "4")]
+    pub text: ::prost::alloc::string::String,
+    /// Max Levenshtein edit distance (0..=2)
+    #[prost(uint32, tag = "5")]
+    pub max_edits: u32,
+    /// Initial chars that must match exactly
+    #[prost(uint32, tag = "6")]
+    pub prefix_length: u32,
+    /// Max similar terms per query token
+    #[prost(uint32, tag = "7")]
+    pub max_expansions: u32,
+    #[prost(uint64, optional, tag = "8")]
+    #[validate(range(min = 1))]
+    pub timeout: ::core::option::Option<u64>,
+}
+/// A single fuzzy candidate returned from FST search
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyCandidateInternal {
+    #[prost(string, tag = "1")]
+    pub term: ::prost::alloc::string::String,
+    #[prost(float, tag = "2")]
+    pub weight: f32,
+}
+/// Response containing fuzzy candidates from a shard
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetFuzzyCandidatesResponseInternal {
+    #[prost(message, repeated, tag = "1")]
+    pub candidates: ::prost::alloc::vec::Vec<FuzzyCandidateInternal>,
+    /// Time spent to process
+    #[prost(double, tag = "2")]
+    pub time: f64,
+    #[prost(message, optional, tag = "3")]
+    pub usage: ::core::option::Option<HardwareUsage>,
+}
 /// Generated client implementations.
 pub mod points_internal_client {
     #![allow(unused_variables, dead_code, missing_docs, clippy::let_unit_value)]
@@ -11674,6 +11731,31 @@ pub mod points_internal_client {
                 .insert(GrpcMethod::new("qdrant.PointsInternal", "Facet"));
             self.inner.unary(req, path, codec).await
         }
+        pub async fn get_fuzzy_candidates(
+            &mut self,
+            request: impl tonic::IntoRequest<super::GetFuzzyCandidatesInternal>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFuzzyCandidatesResponseInternal>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::new(
+                        tonic::Code::Unknown,
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic::codec::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/qdrant.PointsInternal/GetFuzzyCandidates",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("qdrant.PointsInternal", "GetFuzzyCandidates"));
+            self.inner.unary(req, path, codec).await
+        }
     }
 }
 /// Generated server implementations.
@@ -11805,6 +11887,13 @@ pub mod points_internal_server {
             request: tonic::Request<super::FacetCountsInternal>,
         ) -> std::result::Result<
             tonic::Response<super::FacetResponseInternal>,
+            tonic::Status,
+        >;
+        async fn get_fuzzy_candidates(
+            &self,
+            request: tonic::Request<super::GetFuzzyCandidatesInternal>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetFuzzyCandidatesResponseInternal>,
             tonic::Status,
         >;
     }
@@ -12756,6 +12845,53 @@ pub mod points_internal_server {
                     let fut = async move {
                         let inner = inner.0;
                         let method = FacetSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/qdrant.PointsInternal/GetFuzzyCandidates" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetFuzzyCandidatesSvc<T: PointsInternal>(pub Arc<T>);
+                    impl<
+                        T: PointsInternal,
+                    > tonic::server::UnaryService<super::GetFuzzyCandidatesInternal>
+                    for GetFuzzyCandidatesSvc<T> {
+                        type Response = super::GetFuzzyCandidatesResponseInternal;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetFuzzyCandidatesInternal>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as PointsInternal>::get_fuzzy_candidates(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let inner = inner.0;
+                        let method = GetFuzzyCandidatesSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

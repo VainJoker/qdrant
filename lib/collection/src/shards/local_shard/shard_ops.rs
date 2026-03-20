@@ -5,8 +5,10 @@ use async_trait::async_trait;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::data_types::order_by::OrderBy;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use segment::types::{
-    ExtendedPointId, Filter, ScoredPoint, WithPayload, WithPayloadInterface, WithVector,
+    ExtendedPointId, Filter, FuzzyParams, ScoredPoint, WithPayload, WithPayloadInterface,
+    WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -422,6 +424,27 @@ impl ShardOperation for LocalShard {
         let elapsed = start_time.elapsed();
         log_request_to_collector(&self.collection_name, elapsed, || request);
         Ok(FacetResponse { hits })
+    }
+
+    async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        _search_runtime_handle: &Handle,
+        _timeout: Option<Duration>,
+        _hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+        let mut all_candidates: Vec<FuzzyCandidate> = Vec::new();
+        let segments = self.segments.read();
+        for (_id, segment) in segments.iter_original() {
+            let segment_guard = segment.read();
+            let candidates = segment_guard
+                .get_fuzzy_candidates(bind_field, text, params)
+                .map_err(|e| CollectionError::service_error(e.to_string()))?;
+            all_candidates.extend(candidates);
+        }
+        Ok(all_candidates)
     }
 
     /// Finishes ongoing update tasks

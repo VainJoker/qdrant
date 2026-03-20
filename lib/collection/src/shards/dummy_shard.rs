@@ -5,8 +5,10 @@ use async_trait::async_trait;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::index::field_index::CardinalityEstimation;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use segment::types::{
-    ExtendedPointId, Filter, ScoredPoint, SizeStats, WithPayload, WithPayloadInterface, WithVector,
+    ExtendedPointId, Filter, FuzzyParams, ScoredPoint, SizeStats, WithPayload,
+    WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::operations::CollectionUpdateOperations;
@@ -198,6 +200,18 @@ impl ShardOperation for DummyShard {
         _: Option<Duration>,
         _: HwMeasurementAcc,
     ) -> CollectionResult<FacetResponse> {
+        self.dummy()
+    }
+
+    async fn get_fuzzy_candidates(
+        &self,
+        _bind_field: &str,
+        _text: &str,
+        _params: &FuzzyParams,
+        _search_runtime_handle: &Handle,
+        _timeout: Option<Duration>,
+        _hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
         self.dummy()
     }
 

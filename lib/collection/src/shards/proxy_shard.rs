@@ -11,9 +11,10 @@ use common::types::TelemetryDetail;
 use parking_lot::Mutex as ParkingMutex;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::index::field_index::CardinalityEstimation;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use segment::types::{
-    ExtendedPointId, Filter, PointIdType, ScoredPoint, SizeStats, SnapshotFormat, WithPayload,
-    WithPayloadInterface, WithVector,
+    ExtendedPointId, Filter, FuzzyParams, PointIdType, ScoredPoint, SizeStats, SnapshotFormat,
+    WithPayload, WithPayloadInterface, WithVector,
 };
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -377,6 +378,20 @@ impl ShardOperation for ProxyShard {
         let local_shard = &self.wrapped_shard;
         local_shard
             .facet(request, search_runtime_handle, timeout, hw_measurement_acc)
+            .await
+    }
+
+    async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        search_runtime_handle: &Handle,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+        self.wrapped_shard
+            .get_fuzzy_candidates(bind_field, text, params, search_runtime_handle, timeout, hw_measurement_acc)
             .await
     }
 

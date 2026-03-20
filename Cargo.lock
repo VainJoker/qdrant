@@ -5539,6 +5539,7 @@ dependencies = [
  "shard",
  "slog",
  "slog-stdlog",
+ "sparse",
  "storage",
  "sys-info",
  "tempfile",

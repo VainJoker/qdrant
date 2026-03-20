@@ -37,6 +37,8 @@ service PointsInternal {
   rpc QueryBatch(QueryBatchPointsInternal)
       returns (QueryBatchResponseInternal) {}
   rpc Facet(FacetCountsInternal) returns (FacetResponseInternal) {}
+  rpc GetFuzzyCandidates(GetFuzzyCandidatesInternal)
+      returns (GetFuzzyCandidatesResponseInternal) {}
 }
 
 message SyncPoints {
@@ -408,6 +410,37 @@ message FacetHitInternal {
 
 message FacetResponseInternal {
   repeated FacetHitInternal hits = 1;
+  // Time spent to process
+  double time = 2;
+  optional HardwareUsage usage = 3;
+}
+
+// Request to get fuzzy candidates from a shard's payload field FST index
+message GetFuzzyCandidatesInternal {
+  string collection_name = 1;
+  uint32 shard_id = 2;
+  // Payload field name with full-text index (fuzzy_matching: true)
+  string bind_field = 3;
+  // Raw query text to tokenize and find fuzzy matches for
+  string text = 4;
+  // Max Levenshtein edit distance (0..=2)
+  uint32 max_edits = 5;
+  // Initial chars that must match exactly
+  uint32 prefix_length = 6;
+  // Max similar terms per query token
+  uint32 max_expansions = 7;
+  optional uint64 timeout = 8;
+}
+
+// A single fuzzy candidate returned from FST search
+message FuzzyCandidateInternal {
+  string term = 1;
+  float weight = 2;
+}
+
+// Response containing fuzzy candidates from a shard
+message GetFuzzyCandidatesResponseInternal {
+  repeated FuzzyCandidateInternal candidates = 1;
   // Time spent to process
   double time = 2;
   optional HardwareUsage usage = 3;

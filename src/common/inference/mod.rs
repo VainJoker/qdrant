@@ -5,6 +5,7 @@ mod batch_processing;
 mod batch_processing_grpc;
 pub mod bm25;
 pub(crate) mod config;
+pub mod fuzzy_expand;
 mod infer_processing;
 pub mod inference_input;
 mod local_model;

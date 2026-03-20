@@ -3,6 +3,7 @@ use actix_web_validator::{Json, Path, Query};
 use api::rest::models::InferenceUsage;
 use api::rest::{QueryGroupsRequest, QueryRequest, QueryRequestBatch, QueryResponse};
 use collection::operations::shard_selector_internal::ShardSelectorInternal;
+use collection::operations::verification::new_unchecked_verification_pass;
 use itertools::Itertools;
 use storage::content_manager::collection_verification::{
     check_strict_mode, check_strict_mode_batch,
@@ -16,6 +17,7 @@ use super::read_params::ReadParams;
 use crate::actix::auth::ActixAuth;
 use crate::actix::helpers::{self, get_request_hardware_counter};
 use crate::common::inference::api_keys::InferenceApiKeys;
+use crate::common::inference::fuzzy_expand::try_expand_fuzzy_query;
 use crate::common::inference::params::InferenceParams;
 use crate::common::inference::query_requests_rest::{
     CollectionQueryGroupsRequestWithUsage, CollectionQueryRequestWithUsage,
@@ -36,7 +38,7 @@ async fn query_points(
     api_keys: InferenceApiKeys,
 ) -> impl Responder {
     let QueryRequest {
-        internal: query_request,
+        internal: mut query_request,
         shard_key,
     } = request.into_inner();
 
@@ -58,6 +60,20 @@ async fn query_points(
     let inference_params = InferenceParams::new(api_keys, params.timeout());
 
     let result = async {
+        // Attempt fuzzy expansion before converting the query
+        let unchecked_pass = new_unchecked_verification_pass();
+        let toc = dispatcher.toc(&auth, &unchecked_pass);
+        try_expand_fuzzy_query(
+            &mut query_request,
+            &collection.name,
+            toc,
+            auth.clone(),
+            params.timeout(),
+            hw_measurement_acc.clone(),
+            inference_params.clone(),
+        )
+        .await?;
+
         let CollectionQueryRequestWithUsage { request, usage } =
             convert_query_request_from_rest(query_request, &inference_params).await?;
 
@@ -130,13 +146,27 @@ async fn query_points_batch(
     let inference_params = InferenceParams::new(api_keys, params.timeout());
 
     let result = async {
+        let unchecked_pass = new_unchecked_verification_pass();
+        let toc = dispatcher.toc(&auth, &unchecked_pass);
         let mut batch = Vec::with_capacity(searches.len());
 
         for request_item in searches {
             let QueryRequest {
-                internal,
+                mut internal,
                 shard_key,
             } = request_item;
+
+            // Attempt fuzzy expansion before converting the query
+            try_expand_fuzzy_query(
+                &mut internal,
+                &collection.name,
+                toc,
+                auth.clone(),
+                params.timeout(),
+                hw_measurement_acc.clone(),
+                inference_params.clone(),
+            )
+            .await?;
 
             let CollectionQueryRequestWithUsage { request, usage } =
                 convert_query_request_from_rest(internal, &inference_params).await?;

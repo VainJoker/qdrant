@@ -435,6 +435,59 @@ async fn facet_counts_internal(
     Ok(Response::new(response))
 }
 
+async fn get_fuzzy_candidates_internal(
+    toc: &TableOfContent,
+    request: api::grpc::qdrant::GetFuzzyCandidatesInternal,
+    request_hw_data: RequestHwCounter,
+) -> Result<Response<api::grpc::qdrant::GetFuzzyCandidatesResponseInternal>, Status> {
+    let timing = Instant::now();
+
+    let api::grpc::qdrant::GetFuzzyCandidatesInternal {
+        collection_name,
+        shard_id,
+        bind_field,
+        text,
+        max_edits,
+        prefix_length,
+        max_expansions,
+        timeout,
+    } = request;
+
+    let params = segment::types::FuzzyParams {
+        max_edits: max_edits as u8,
+        prefix_length: prefix_length as u8,
+        max_expansions: max_expansions as u8,
+    };
+
+    let shard_selection = ShardSelectorInternal::ShardId(shard_id);
+
+    let candidates = toc
+        .get_fuzzy_candidates_internal(
+            &collection_name,
+            &bind_field,
+            &text,
+            &params,
+            shard_selection,
+            timeout.map(Duration::from_secs),
+            request_hw_data.get_counter(),
+        )
+        .await?;
+
+    let response = api::grpc::qdrant::GetFuzzyCandidatesResponseInternal {
+        candidates: candidates
+            .into_iter()
+            .map(|c| api::grpc::qdrant::FuzzyCandidateInternal {
+                term: c.term,
+                weight: c.weight,
+            })
+            .collect(),
+        time: timing.elapsed().as_secs_f64(),
+        usage: request_hw_data.to_grpc_api(),
+    };
+
+    Ok(Response::new(response))
+}
+
 impl PointsInternalService {
     /// Generates a new `RequestHwCounter` for the request.
     /// This counter is indented to be used for internal requests.
@@ -845,6 +898,19 @@ impl PointsInternal for PointsInternalService {
             request_inner.collection_name.clone(),
         );
         facet_counts_internal(self.toc.as_ref(), request_inner, hw_data).await
+    }
+
+    async fn get_fuzzy_candidates(
+        &self,
+        request: Request<api::grpc::qdrant::GetFuzzyCandidatesInternal>,
+    ) -> Result<Response<api::grpc::qdrant::GetFuzzyCandidatesResponseInternal>, Status> {
+        validate_and_log(request.get_ref());
+
+        let request_inner = request.into_inner();
+        let hw_data = self.get_request_collection_hw_usage_counter_for_internal(
+            request_inner.collection_name.clone(),
+        );
+        get_fuzzy_candidates_internal(self.toc.as_ref(), request_inner, hw_data).await
     }
 }
 

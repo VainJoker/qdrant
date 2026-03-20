@@ -263,4 +263,35 @@ impl ShardReplicaSet {
         )
         .await
     }
+
+    pub async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &segment::types::FuzzyParams,
+        local_only: bool,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate>> {
+        let bind_field = bind_field.to_string();
+        let text = text.to_string();
+        let params = params.clone();
+        self.execute_read_operation(
+            |shard| {
+                let bind_field = bind_field.clone();
+                let text = text.clone();
+                let params = params.clone();
+                let search_runtime = self.search_runtime.clone();
+                let hw_acc = hw_measurement_acc.clone();
+                async move {
+                    shard
+                        .get_fuzzy_candidates(&bind_field, &text, &params, &search_runtime, timeout, hw_acc)
+                        .await
+                }
+                .boxed()
+            },
+            local_only,
+        )
+        .await
+    }
 }

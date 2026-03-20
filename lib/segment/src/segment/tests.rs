@@ -21,9 +21,12 @@ use crate::segment_constructor::simple_segment_constructor::{
     VECTOR1_NAME, VECTOR2_NAME, build_multivec_segment, build_simple_segment,
 };
 use crate::segment_constructor::{build_segment, load_segment};
+use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
+use crate::json_path::JsonPath;
 use crate::types::{
-    Distance, Filter, Indexes, Payload, PointIdType, SnapshotFormat, VectorDataConfig,
-    VectorStorageType, WithPayload, WithVector,
+    Distance, Filter, FuzzyParams, Indexes, Payload, PayloadFieldSchema, PayloadSchemaParams,
+    PointIdType, SnapshotFormat, VectorDataConfig, VectorStorageType,
+    WithPayload, WithVector,
 };
 
 fn init_logger() {
@@ -846,5 +849,154 @@ fn test_dense_deferred_points() {
         segment.deferred_internal_id,
         Some(13),
         "Deferred internal ID should still be 13 after reopening"
+    );
+}
+
+/// Integration test: verify that `Segment::get_fuzzy_candidates` correctly
+/// tokenizes a text query using the field index's own tokenizer and returns
+/// fuzzy-expanded candidates from the FST.
+///
+/// This tests the full segment-level pipeline:
+///   upsert_point → set_payload → create_field_index(fuzzy_matching=true)
+///   → get_fuzzy_candidates(typo_text) → candidates include corrected terms
+#[test]
+fn test_get_fuzzy_candidates_segment_pipeline() {
+    let dir = Builder::new().prefix("segment_fuzzy").tempdir().unwrap();
+    let hw = HardwareCounterCell::new();
+
+    let mut segment = build_simple_segment(dir.path(), 4, Distance::Dot).unwrap();
+
+    // -- Insert points with text payload ------------------------------------
+    // Each point has a `text_content` payload field.
+    let documents: &[(u64, &str)] = &[
+        (0, "the quick brown fox jumps over the lazy dog"),
+        (1, "machine learning enables fuzzy text matching"),
+        (2, "quantum computing advances cryptography"),
+        (3, "natural language processing improves search quality"),
+        (4, "brown bears hibernate during winter months"),
+    ];
+
+    for (id, text) in documents {
+        segment
+            .upsert_point(
+                *id as u64,
+                PointIdType::NumId(*id),
+                only_default_vector(&[0.1, 0.2, 0.3, 0.4]),
+                &hw,
+            )
+            .unwrap();
+
+        let payload: Payload = serde_json::from_str(
+            &serde_json::json!({ "text_content": text }).to_string()
+        ).unwrap();
+        segment
+            .set_payload(*id as u64, PointIdType::NumId(*id), &payload, &None, &hw)
+            .unwrap();
+    }
+
+    // -- Create a text index with fuzzy_matching enabled --------------------
+    let text_schema = PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::Word,
+        lowercase: Some(true),
+        fuzzy_matching: Some(true),
+        ..Default::default()
+    }));
+
+    let field_path: JsonPath = "text_content".parse().unwrap();
+    segment
+        .create_field_index(10, &field_path, Some(&text_schema), &hw)
+        .unwrap();
+
+    // -- Query 1: exact tokens → candidates include exact terms -----------
+    let exact_params = FuzzyParams {
+        max_edits: 0,
+        prefix_length: 0,
+        max_expansions: 50,
+    };
+    let candidates =
+        segment.get_fuzzy_candidates("text_content", "quick", &exact_params).unwrap();
+    // With max_edits=0, "quick" must expand only to itself if present in the index
+    let terms: Vec<&str> = candidates.iter().map(|c| c.term.as_str()).collect();
+    assert!(
+        terms.contains(&"quick"),
+        "exact match 'quick' must be in candidates; got: {terms:?}"
+    );
+    // All exact-match candidates have weight 1.0 (distance=0)
+    for c in &candidates {
+        assert_eq!(c.weight, 1.0, "exact match weight must be 1.0: {c:?}");
+    }
+
+    // -- Query 2: typo query → fuzzy expansion corrects the typo ----------
+    let fuzzy_params = FuzzyParams {
+        max_edits: 1,
+        prefix_length: 0,
+        max_expansions: 50,
+    };
+    // "quuck" is 1 edit from "quick" (u→i substitution at pos 3)
+    let candidates =
+        segment.get_fuzzy_candidates("text_content", "quuck", &fuzzy_params).unwrap();
+    let terms: Vec<&str> = candidates.iter().map(|c| c.term.as_str()).collect();
+    assert!(
+        terms.contains(&"quick"),
+        "fuzzy match: 'quuck' should expand to 'quick'; got: {terms:?}"
+    );
+    // All candidates must have weight in (0, 1]
+    for c in &candidates {
+        assert!(
+            c.weight > 0.0 && c.weight <= 1.0,
+            "candidate weight must be in (0,1]: {c:?}"
+        );
+    }
+
+    // -- Query 3: multi-token text → each token fuzzy-expands separately --
+    // "brawn beers" → "brawn"→"brown" (a→o, dist=1), "beers"→"bears" (e→a pos 3, dist=1)
+    let multi_candidates =
+        segment.get_fuzzy_candidates("text_content", "brawn beers", &fuzzy_params).unwrap();
+    let multi_terms: Vec<&str> = multi_candidates.iter().map(|c| c.term.as_str()).collect();
+    assert!(
+        multi_terms.contains(&"brown"),
+        "multi-token: 'brawn' should expand to 'brown'; got: {multi_terms:?}"
+    );
+    assert!(
+        multi_terms.contains(&"bears"),
+        "multi-token: 'beers' should expand to 'bears'; got: {multi_terms:?}"
+    );
+
+    // -- Query 4: prefix_length guard blocks cross-prefix matches ----------
+    // "cat" (3 chars) with prefix_length=3 and max_edits=1 → only exact match
+    //  (no "bat"/"rat"/"mat"/"hat" since they differ in the first char)
+    // (these words aren't in our docs, so result should be empty)
+    let prefix_params = FuzzyParams {
+        max_edits: 1,
+        prefix_length: 3,
+        max_expansions: 50,
+    };
+    let prefix_candidates =
+        segment.get_fuzzy_candidates("text_content", "quack", &prefix_params).unwrap();
+    let prefix_terms: Vec<&str> = prefix_candidates.iter().map(|c| c.term.as_str()).collect();
+    // "quack" shares "qua" prefix — "quick"/"quirk" start with "qui" ≠ "qua",
+    // so with prefix_length=3 there should be no "quick" expansion
+    assert!(
+        !prefix_terms.contains(&"quick"),
+        "prefix_length=3 must block 'quack'→'quick'; got: {prefix_terms:?}"
+    );
+
+    // -- Query 5: unknown token → empty result ----------------------------
+    let unknown_candidates = segment
+        .get_fuzzy_candidates("text_content", "xyzzyxyzzy", &fuzzy_params)
+        .unwrap();
+    assert!(
+        unknown_candidates.is_empty(),
+        "completely unknown token should yield no candidates; got: {unknown_candidates:?}"
+    );
+
+    // -- Query 6: field with no index → silently returns empty -----------
+    let no_index_candidates = segment
+        .get_fuzzy_candidates("nonexistent_field", "quick", &fuzzy_params)
+        .unwrap();
+    assert!(
+        no_index_candidates.is_empty(),
+        "missing field should return empty candidates; got: {no_index_candidates:?}"
     );
 }

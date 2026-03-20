@@ -9,7 +9,8 @@ use rand::RngExt;
 use segment::common::reciprocal_rank_fusion::rrf_scoring;
 use segment::common::score_fusion::{ScoreFusion, score_fusion};
 use segment::data_types::vectors::VectorStructInternal;
-use segment::types::{Order, ScoredPoint, WithPayloadInterface, WithVector};
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::types::{FuzzyParams, Order, ScoredPoint, WithPayloadInterface, WithVector};
 use segment::utils::scored_point_ties::ScoredPointTies;
 use tokio::time::Instant;
 
@@ -700,6 +701,55 @@ impl Collection {
         }
 
         Ok(results)
+    }
+
+    /// Get fuzzy candidates from all shards, aggregating by max weight per term.
+    pub async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        shard_selection: &ShardSelectorInternal,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+        let shard_holder = self.shards_holder.read().await;
+        let target_shards = shard_holder.select_shards(shard_selection)?;
+
+        let all_futures = target_shards.iter().map(|(shard, _shard_key)| {
+            shard.get_fuzzy_candidates(
+                bind_field,
+                text,
+                params,
+                false, // not local_only
+                timeout,
+                hw_measurement_acc.clone(),
+            )
+        });
+
+        let all_results = futures::future::try_join_all(all_futures).await?;
+
+        // Aggregate: for same term across shards, take max weight
+        use std::collections::HashMap;
+        let mut global: HashMap<String, f32> = HashMap::new();
+        for candidates in all_results {
+            for c in candidates {
+                global
+                    .entry(c.term)
+                    .and_modify(|w| *w = w.max(c.weight))
+                    .or_insert(c.weight);
+            }
+        }
+
+        // Sort by weight descending, truncate to max_expansions
+        let mut candidates: Vec<FuzzyCandidate> = global
+            .into_iter()
+            .map(|(term, weight)| FuzzyCandidate { term, weight })
+            .collect();
+        candidates.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
+        candidates.truncate(params.max_expansions as usize);
+
+        Ok(candidates)
     }
 }
 

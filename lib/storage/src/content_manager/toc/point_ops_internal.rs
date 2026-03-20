@@ -8,6 +8,8 @@ use collection::operations::universal_query::shard_query::{ShardQueryRequest, Sh
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::types::FuzzyParams;
 
 use super::TableOfContent;
 use crate::content_manager::errors::StorageResult;
@@ -43,6 +45,32 @@ impl TableOfContent {
 
         let res = collection
             .facet(request, shard_selection, None, timeout, hw_measurement_acc)
+            .await?;
+
+        Ok(res)
+    }
+
+    pub async fn get_fuzzy_candidates_internal(
+        &self,
+        collection_name: &str,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        shard_selection: ShardSelectorInternal,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> StorageResult<Vec<FuzzyCandidate>> {
+        let collection = self.get_collection_unchecked(collection_name).await?;
+
+        let res = collection
+            .get_fuzzy_candidates(
+                bind_field,
+                text,
+                params,
+                &shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
             .await?;
 
         Ok(res)

@@ -37,6 +37,17 @@ impl Bm25 {
         out
     }
 
+    /// Tokenizes input without stemming. Used for fuzzy expansion where we need
+    /// pre-stem tokens to match against the FST index.
+    pub fn tokenize_without_stem(&self, input: &str) -> Vec<String> {
+        let tokenizer_conf = self.config.text_preprocessing_config.clone();
+        let tokens_processor = new_token_processor_from_config_no_stem(tokenizer_conf);
+        let tokenizer = Tokenizer::new(self.config.tokenizer, tokens_processor);
+        let mut out = vec![];
+        tokenizer.tokenize_query(input, |t| out.push(t.into_owned()));
+        out
+    }
+
     /// Embeds the given input using the Bm25 algorithm and configured options/hyperparameters.
     pub fn search_embed(&self, input: &str) -> VectorPersisted {
         let tokens = self.tokenize(input);
@@ -93,7 +104,7 @@ impl Bm25 {
         tf_map
     }
 
-    fn compute_token_id(token: &str) -> u32 {
+    pub fn compute_token_id(token: &str) -> u32 {
         (murmur3_32_of_slice(token.as_bytes(), 0) as i32).unsigned_abs()
     }
 }
@@ -135,6 +146,40 @@ fn new_token_processor_from_config(value: TextPreprocessingConfig) -> TokensProc
         ascii_folding,
         Arc::new(StopwordsFilter::new(&stopwords_config, lowercase)),
         stemmer,
+        min_token_len,
+        max_token_len,
+    )
+}
+
+/// Creates a TokensProcessor from config but with stemming disabled.
+/// Used for fuzzy expansion where pre-stem tokens are needed.
+fn new_token_processor_from_config_no_stem(value: TextPreprocessingConfig) -> TokensProcessor {
+    let TextPreprocessingConfig {
+        language,
+        lowercase,
+        ascii_folding,
+        stopwords,
+        stemmer: _, // Ignored: no stemming for fuzzy tokens
+        min_token_len,
+        max_token_len,
+    } = value;
+
+    let lowercase = lowercase.unwrap_or(true);
+    let ascii_folding = ascii_folding.unwrap_or(false);
+    let language = language.unwrap_or_else(|| DEFAULT_LANGUAGE.to_string());
+
+    let stopwords_config = match stopwords {
+        None => Language::from_str(&language)
+            .ok()
+            .map(StopwordsInterface::Language),
+        Some(stopwords_interface) => Some(stopwords_interface),
+    };
+
+    TokensProcessor::new(
+        lowercase,
+        ascii_folding,
+        Arc::new(StopwordsFilter::new(&stopwords_config, lowercase)),
+        None, // No stemmer
         min_token_len,
         max_token_len,
     )

@@ -396,6 +396,9 @@ fn configure_validation(builder: Builder) -> Builder {
             ("QueryBatchPointsInternal.timeout", "range(min = 1)"),
             ("FacetCountsInternal.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("FacetCountsInternal.timeout", "range(min = 1)"),
+            ("GetFuzzyCandidatesInternal.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
+            ("GetFuzzyCandidatesInternal.bind_field", "length(min = 1)"),
+            ("GetFuzzyCandidatesInternal.timeout", "range(min = 1)"),
         ], &[])
         // Service: raft_service.proto
         .validates(&[

@@ -775,7 +775,7 @@ pub async fn get(
 
 pub async fn query(
     toc_provider: impl CheckedTocProvider,
-    query_points: QueryPoints,
+    mut query_points: QueryPoints,
     shard_selection: Option<ShardId>,
     auth: Auth,
     request_hw_counter: RequestHwCounter,
@@ -790,6 +790,20 @@ pub async fn query(
         .transpose()?;
     let collection_name = query_points.collection_name.clone();
     let timeout = query_points.timeout;
+
+    // Attempt fuzzy expansion before converting the query
+    let unchecked_toc = toc_provider.get_toc();
+    crate::common::inference::fuzzy_expand::try_expand_fuzzy_query_grpc(
+        &mut query_points,
+        unchecked_toc,
+        auth.clone(),
+        timeout.map(Duration::from_secs),
+        request_hw_counter.get_counter(),
+        inference_params.clone(),
+    )
+    .await
+    .map_err(|e| Status::internal(format!("Fuzzy expansion error: {e}")))?;
+
     let (request, inference_usage) =
         convert_query_points_from_grpc(query_points, inference_params).await?;
 
@@ -844,7 +858,20 @@ pub async fn query_batch(
     let mut requests = Vec::with_capacity(points.len());
     let mut total_inference_usage = InferenceUsage::default();
 
-    for query_points in points {
+    let unchecked_toc = toc_provider.get_toc();
+    for mut query_points in points {
+        // Attempt fuzzy expansion before converting the query
+        crate::common::inference::fuzzy_expand::try_expand_fuzzy_query_grpc(
+            &mut query_points,
+            unchecked_toc,
+            auth.clone(),
+            timeout,
+            request_hw_counter.get_counter(),
+            inference_params.clone(),
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Fuzzy expansion error: {e}")))?;
+
         let shard_key_selector = query_points.shard_key_selector.clone();
         let shard_selector = convert_shard_selector_for_read(None, shard_key_selector)?;
         let (request, usage) =

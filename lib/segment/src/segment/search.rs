@@ -13,11 +13,12 @@ use crate::data_types::vectors::QueryVector;
 use crate::data_types::vectors::VectorStructInternal;
 use crate::entry::entry_point::NonAppendableSegmentEntry;
 use crate::id_tracker::IdTracker;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 #[cfg(feature = "testing")]
 use crate::types::VectorName;
 #[cfg(feature = "testing")]
 use crate::types::{Filter, SearchParams};
-use crate::types::{ScoredPoint, WithPayload, WithVector};
+use crate::types::{FuzzyParams, ScoredPoint, WithPayload, WithVector};
 
 impl Segment {
     /// Converts raw ScoredPointOffset search result into ScoredPoint result
@@ -128,5 +129,41 @@ impl Segment {
         )?;
 
         Ok(result.into_iter().next().unwrap())
+    }
+
+    /// Search for fuzzy candidates in the payload field's full-text index FST.
+    /// Tokenizes `text` using the field index's own tokenizer, then searches the FST
+    /// for each resulting token. Returns all fuzzy matches.
+    pub fn get_fuzzy_candidates(
+        &self,
+        field_name: &str,
+        text: &str,
+        params: &FuzzyParams,
+    ) -> OperationResult<Vec<FuzzyCandidate>> {
+        let payload_index = self.payload_index.borrow();
+        let field_path: crate::json_path::JsonPath = field_name.parse().map_err(|_| {
+            OperationError::service_error(format!("Invalid field path '{field_name}'"))
+        })?;
+        let field_indexes = payload_index.field_indexes.get(&field_path);
+
+        let Some(field_indexes) = field_indexes else {
+            return Ok(vec![]);
+        };
+
+        for field_index in field_indexes {
+            if let Some(text_index) = field_index.as_full_text_index() {
+                if let Some(fuzzy_index) = text_index.get_fuzzy_index() {
+                    let tokenizer = text_index.get_tokenizer();
+                    let mut candidates = Vec::new();
+                    tokenizer.tokenize_query(text, |token| {
+                        let results = fuzzy_index.search(token.as_ref(), params);
+                        candidates.extend(results);
+                    });
+                    return Ok(candidates);
+                }
+            }
+        }
+
+        Ok(vec![])
     }
 }

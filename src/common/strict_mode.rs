@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use collection::operations::verification::StrictModeVerification;
+use collection::operations::verification::{
+    StrictModeVerification, new_unchecked_verification_pass,
+};
 use storage::content_manager::collection_verification::{
     check_strict_mode, check_strict_mode_batch, check_strict_mode_toc, check_strict_mode_toc_batch,
 };
@@ -11,6 +13,10 @@ use storage::rbac::Auth;
 
 /// Trait for different ways of providing something with `toc` that may do additional checks eg. for Strict mode.
 pub trait CheckedTocProvider {
+    /// Get a reference to the TOC without any strict mode checks.
+    /// Useful for operations that need TOC access before the main query conversion.
+    fn get_toc(&self) -> &TableOfContent;
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,
@@ -44,6 +50,10 @@ impl<'a> UncheckedTocProvider<'a> {
 }
 
 impl CheckedTocProvider for UncheckedTocProvider<'_> {
+    fn get_toc(&self) -> &TableOfContent {
+        self.toc
+    }
+
     async fn check_strict_mode(
         &self,
         _request: &impl StrictModeVerification,
@@ -84,6 +94,12 @@ impl<'a> StrictModeCheckedTocProvider<'a> {
 }
 
 impl CheckedTocProvider for StrictModeCheckedTocProvider<'_> {
+    fn get_toc(&self) -> &TableOfContent {
+        let pass = new_unchecked_verification_pass();
+        let auth = Auth::new_internal(storage::rbac::Access::full("get_toc"));
+        self.dispatcher.toc(&auth, &pass)
+    }
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,
@@ -134,6 +150,10 @@ impl<'a> StrictModeCheckedInternalTocProvider<'a> {
 }
 
 impl CheckedTocProvider for StrictModeCheckedInternalTocProvider<'_> {
+    fn get_toc(&self) -> &TableOfContent {
+        self.toc
+    }
+
     async fn check_strict_mode(
         &self,
         request: &impl StrictModeVerification,

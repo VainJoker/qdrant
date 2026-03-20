@@ -27,6 +27,7 @@ pub enum PrefixLevState {
 impl Automaton for PrefixLevenshtein {
     type State = PrefixLevState;
 
+    #[inline]
     fn start(&self) -> Self::State {
         if self.prefix.is_empty() {
             PrefixLevState::Fuzzy(self.lev.start())
@@ -35,6 +36,7 @@ impl Automaton for PrefixLevenshtein {
         }
     }
 
+    #[inline]
     fn is_match(&self, state: &Self::State) -> bool {
         match state {
             PrefixLevState::Prefix(_) => false,
@@ -43,6 +45,7 @@ impl Automaton for PrefixLevenshtein {
         }
     }
 
+    #[inline]
     fn can_match(&self, state: &Self::State) -> bool {
         match state {
             PrefixLevState::Prefix(_) => true,
@@ -51,6 +54,7 @@ impl Automaton for PrefixLevenshtein {
         }
     }
 
+    #[inline]
     fn will_always_match(&self, state: &Self::State) -> bool {
         match state {
             PrefixLevState::Prefix(_) => false,
@@ -59,6 +63,7 @@ impl Automaton for PrefixLevenshtein {
         }
     }
 
+    #[inline]
     fn accept(&self, state: &Self::State, byte: u8) -> Self::State {
         match state {
             PrefixLevState::Prefix(i) => {
