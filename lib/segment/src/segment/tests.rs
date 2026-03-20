@@ -11,22 +11,21 @@ use tempfile::Builder;
 use super::*;
 use crate::common::operation_error::OperationError::PointIdError;
 use crate::common::{check_named_vectors, check_vector, check_vector_name};
+use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
 use crate::data_types::named_vectors::NamedVectors;
 use crate::data_types::query_context::QueryContext;
 use crate::data_types::vectors::{DEFAULT_VECTOR_NAME, only_default_vector};
 use crate::entry::SnapshotEntry as _;
 use crate::entry::entry_point::{NonAppendableSegmentEntry as _, SegmentEntry as _};
 use crate::id_tracker::IdTracker;
+use crate::json_path::JsonPath;
 use crate::segment_constructor::simple_segment_constructor::{
     VECTOR1_NAME, VECTOR2_NAME, build_multivec_segment, build_simple_segment,
 };
 use crate::segment_constructor::{build_segment, load_segment};
-use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
-use crate::json_path::JsonPath;
 use crate::types::{
     Distance, Filter, FuzzyParams, Indexes, Payload, PayloadFieldSchema, PayloadSchemaParams,
-    PointIdType, SnapshotFormat, VectorDataConfig, VectorStorageType,
-    WithPayload, WithVector,
+    PointIdType, SnapshotFormat, VectorDataConfig, VectorStorageType, WithPayload, WithVector,
 };
 
 fn init_logger() {
@@ -886,9 +885,8 @@ fn test_get_fuzzy_candidates_segment_pipeline() {
             )
             .unwrap();
 
-        let payload: Payload = serde_json::from_str(
-            &serde_json::json!({ "text_content": text }).to_string()
-        ).unwrap();
+        let payload: Payload =
+            serde_json::from_str(&serde_json::json!({ "text_content": text }).to_string()).unwrap();
         segment
             .set_payload(*id as u64, PointIdType::NumId(*id), &payload, &None, &hw)
             .unwrap();
@@ -914,8 +912,9 @@ fn test_get_fuzzy_candidates_segment_pipeline() {
         prefix_length: 0,
         max_expansions: 50,
     };
-    let candidates =
-        segment.get_fuzzy_candidates("text_content", "quick", &exact_params).unwrap();
+    let candidates = segment
+        .get_fuzzy_candidates("text_content", "quick", &exact_params)
+        .unwrap();
     // With max_edits=0, "quick" must expand only to itself if present in the index
     let terms: Vec<&str> = candidates.iter().map(|c| c.term.as_str()).collect();
     assert!(
@@ -934,8 +933,9 @@ fn test_get_fuzzy_candidates_segment_pipeline() {
         max_expansions: 50,
     };
     // "quuck" is 1 edit from "quick" (u→i substitution at pos 3)
-    let candidates =
-        segment.get_fuzzy_candidates("text_content", "quuck", &fuzzy_params).unwrap();
+    let candidates = segment
+        .get_fuzzy_candidates("text_content", "quuck", &fuzzy_params)
+        .unwrap();
     let terms: Vec<&str> = candidates.iter().map(|c| c.term.as_str()).collect();
     assert!(
         terms.contains(&"quick"),
@@ -951,8 +951,9 @@ fn test_get_fuzzy_candidates_segment_pipeline() {
 
     // -- Query 3: multi-token text → each token fuzzy-expands separately --
     // "brawn beers" → "brawn"→"brown" (a→o, dist=1), "beers"→"bears" (e→a pos 3, dist=1)
-    let multi_candidates =
-        segment.get_fuzzy_candidates("text_content", "brawn beers", &fuzzy_params).unwrap();
+    let multi_candidates = segment
+        .get_fuzzy_candidates("text_content", "brawn beers", &fuzzy_params)
+        .unwrap();
     let multi_terms: Vec<&str> = multi_candidates.iter().map(|c| c.term.as_str()).collect();
     assert!(
         multi_terms.contains(&"brown"),
@@ -972,8 +973,9 @@ fn test_get_fuzzy_candidates_segment_pipeline() {
         prefix_length: 3,
         max_expansions: 50,
     };
-    let prefix_candidates =
-        segment.get_fuzzy_candidates("text_content", "quack", &prefix_params).unwrap();
+    let prefix_candidates = segment
+        .get_fuzzy_candidates("text_content", "quack", &prefix_params)
+        .unwrap();
     let prefix_terms: Vec<&str> = prefix_candidates.iter().map(|c| c.term.as_str()).collect();
     // "quack" shares "qua" prefix — "quick"/"quirk" start with "qui" ≠ "qua",
     // so with prefix_length=3 there should be no "quick" expansion

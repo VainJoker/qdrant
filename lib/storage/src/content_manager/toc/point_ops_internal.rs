@@ -8,7 +8,7 @@ use collection::operations::universal_query::shard_query::{ShardQueryRequest, Sh
 use collection::shards::shard::ShardId;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates;
 use segment::types::FuzzyParams;
 
 use super::TableOfContent;
@@ -59,11 +59,11 @@ impl TableOfContent {
         shard_selection: ShardSelectorInternal,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> StorageResult<Vec<FuzzyCandidate>> {
+    ) -> StorageResult<Vec<FuzzyTokenCandidates>> {
         let collection = self.get_collection_unchecked(collection_name).await?;
 
         let res = collection
-            .get_fuzzy_candidates(
+            .get_fuzzy_candidates_grouped(
                 bind_field,
                 text,
                 params,

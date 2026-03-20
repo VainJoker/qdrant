@@ -13,7 +13,9 @@ use crate::data_types::vectors::QueryVector;
 use crate::data_types::vectors::VectorStructInternal;
 use crate::entry::entry_point::NonAppendableSegmentEntry;
 use crate::id_tracker::IdTracker;
-use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use crate::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, FuzzyTokenCandidates,
+};
 #[cfg(feature = "testing")]
 use crate::types::VectorName;
 #[cfg(feature = "testing")]
@@ -140,6 +142,19 @@ impl Segment {
         text: &str,
         params: &FuzzyParams,
     ) -> OperationResult<Vec<FuzzyCandidate>> {
+        let grouped = self.get_fuzzy_candidates_grouped(field_name, text, params)?;
+        Ok(grouped
+            .into_iter()
+            .flat_map(|group| group.candidates)
+            .collect())
+    }
+
+    pub fn get_fuzzy_candidates_grouped(
+        &self,
+        field_name: &str,
+        text: &str,
+        params: &FuzzyParams,
+    ) -> OperationResult<Vec<FuzzyTokenCandidates>> {
         let payload_index = self.payload_index.borrow();
         let field_path: crate::json_path::JsonPath = field_name.parse().map_err(|_| {
             OperationError::service_error(format!("Invalid field path '{field_name}'"))
@@ -156,8 +171,10 @@ impl Segment {
                     let tokenizer = text_index.get_tokenizer();
                     let mut candidates = Vec::new();
                     tokenizer.tokenize_query(text, |token| {
-                        let results = fuzzy_index.search(token.as_ref(), params);
-                        candidates.extend(results);
+                        candidates.push(FuzzyTokenCandidates {
+                            token: token.as_ref().to_owned(),
+                            candidates: fuzzy_index.search(token.as_ref(), params),
+                        });
                     });
                     return Ok(candidates);
                 }

@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates;
 use segment::types::*;
 use shard::count::CountRequestInternal;
 use shard::retrieve::record_internal::RecordInternal;
@@ -103,7 +103,7 @@ pub trait ShardOperation {
         search_runtime_handle: &Handle,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>>;
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>>;
 
     /// Signal `Stop` to all background operations gracefully
     /// and wait till they are finished.

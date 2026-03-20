@@ -11168,13 +11168,22 @@ pub struct FuzzyCandidateInternal {
     #[prost(float, tag = "2")]
     pub weight: f32,
 }
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyCandidateGroupInternal {
+    #[prost(string, tag = "1")]
+    pub token: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub candidates: ::prost::alloc::vec::Vec<FuzzyCandidateInternal>,
+}
 /// Response containing fuzzy candidates from a shard
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetFuzzyCandidatesResponseInternal {
     #[prost(message, repeated, tag = "1")]
-    pub candidates: ::prost::alloc::vec::Vec<FuzzyCandidateInternal>,
+    pub candidate_groups: ::prost::alloc::vec::Vec<FuzzyCandidateGroupInternal>,
     /// Time spent to process
     #[prost(double, tag = "2")]
     pub time: f64,

@@ -9,7 +9,9 @@ use rand::RngExt;
 use segment::common::reciprocal_rank_fusion::rrf_scoring;
 use segment::common::score_fusion::{ScoreFusion, score_fusion};
 use segment::data_types::vectors::VectorStructInternal;
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, FuzzyTokenCandidates,
+};
 use segment::types::{FuzzyParams, Order, ScoredPoint, WithPayloadInterface, WithVector};
 use segment::utils::scored_point_ties::ScoredPointTies;
 use tokio::time::Instant;
@@ -703,8 +705,9 @@ impl Collection {
         Ok(results)
     }
 
-    /// Get fuzzy candidates from all shards, aggregating by max weight per term.
-    pub async fn get_fuzzy_candidates(
+    /// Get fuzzy candidates from all shards, aggregating by max weight per term,
+    /// independently for each tokenizer-produced query token.
+    pub async fn get_fuzzy_candidates_grouped(
         &self,
         bind_field: &str,
         text: &str,
@@ -712,7 +715,7 @@ impl Collection {
         shard_selection: &ShardSelectorInternal,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
         let shard_holder = self.shards_holder.read().await;
         let target_shards = shard_holder.select_shards(shard_selection)?;
 
@@ -729,27 +732,74 @@ impl Collection {
 
         let all_results = futures::future::try_join_all(all_futures).await?;
 
-        // Aggregate: for same term across shards, take max weight
         use std::collections::HashMap;
-        let mut global: HashMap<String, f32> = HashMap::new();
-        for candidates in all_results {
-            for c in candidates {
-                global
-                    .entry(c.term)
-                    .and_modify(|w| *w = w.max(c.weight))
-                    .or_insert(c.weight);
+        let mut token_order = Vec::new();
+        let mut grouped: HashMap<String, HashMap<String, f32>> = HashMap::new();
+
+        for token_groups in all_results {
+            for token_group in token_groups {
+                if !grouped.contains_key(&token_group.token) {
+                    token_order.push(token_group.token.clone());
+                }
+
+                let per_token = grouped.entry(token_group.token).or_default();
+                for candidate in token_group.candidates {
+                    per_token
+                        .entry(candidate.term)
+                        .and_modify(|weight| *weight = weight.max(candidate.weight))
+                        .or_insert(candidate.weight);
+                }
             }
         }
 
-        // Sort by weight descending, truncate to max_expansions
-        let mut candidates: Vec<FuzzyCandidate> = global
+        Ok(token_order
             .into_iter()
-            .map(|(term, weight)| FuzzyCandidate { term, weight })
-            .collect();
-        candidates.sort_by(|a, b| b.weight.partial_cmp(&a.weight).unwrap_or(std::cmp::Ordering::Equal));
-        candidates.truncate(params.max_expansions as usize);
+            .filter_map(|token| {
+                let per_token = grouped.remove(&token)?;
+                let mut candidates: Vec<FuzzyCandidate> = per_token
+                    .into_iter()
+                    .map(|(term, weight)| FuzzyCandidate { term, weight })
+                    .collect();
+                candidates.sort_by(|a, b| {
+                    b.weight
+                        .partial_cmp(&a.weight)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                candidates.truncate(params.max_expansions as usize);
 
-        Ok(candidates)
+                if candidates.is_empty() {
+                    None
+                } else {
+                    Some(FuzzyTokenCandidates { token, candidates })
+                }
+            })
+            .collect())
+    }
+
+    /// Get fuzzy candidates from all shards, aggregating by max weight per term.
+    pub async fn get_fuzzy_candidates(
+        &self,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        shard_selection: &ShardSelectorInternal,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+        let grouped = self
+            .get_fuzzy_candidates_grouped(
+                bind_field,
+                text,
+                params,
+                shard_selection,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+        Ok(grouped
+            .into_iter()
+            .flat_map(|token_group| token_group.candidates)
+            .collect())
     }
 }
 

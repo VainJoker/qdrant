@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::index::field_index::CardinalityEstimation;
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates;
 use segment::types::{
     ExtendedPointId, Filter, FuzzyParams, ScoredPoint, SizeStats, WithPayload,
     WithPayloadInterface, WithVector,
@@ -211,7 +211,7 @@ impl ShardOperation for DummyShard {
         _search_runtime_handle: &Handle,
         _timeout: Option<Duration>,
         _hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
         self.dummy()
     }
 

@@ -18,7 +18,9 @@ use common::counter::hardware_accumulator::HwMeasurementAcc;
 use futures::TryStreamExt as _;
 use futures::stream::FuturesUnordered;
 use segment::data_types::facets::{FacetParams, FacetResponse};
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, FuzzyTokenCandidates,
+};
 use segment::types::{FuzzyParams, ScoredPoint, ShardKey};
 use shard::retrieve::record_internal::RecordInternal;
 use shard::scroll::ScrollRequestInternal;
@@ -427,6 +429,35 @@ impl TableOfContent {
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
     ) -> StorageResult<Vec<FuzzyCandidate>> {
+        let grouped = self
+            .get_fuzzy_candidates_grouped(
+                collection_name,
+                bind_field,
+                text,
+                params,
+                auth,
+                timeout,
+                hw_measurement_acc,
+            )
+            .await?;
+
+        Ok(grouped
+            .into_iter()
+            .flat_map(|token_group| token_group.candidates)
+            .collect())
+    }
+
+    /// Get fuzzy candidates from collection's FST indexes, preserving token grouping.
+    pub async fn get_fuzzy_candidates_grouped(
+        &self,
+        collection_name: &str,
+        bind_field: &str,
+        text: &str,
+        params: &FuzzyParams,
+        auth: Auth,
+        timeout: Option<Duration>,
+        hw_measurement_acc: HwMeasurementAcc,
+    ) -> StorageResult<Vec<FuzzyTokenCandidates>> {
         use crate::rbac::AccessRequirements;
         let collection_pass = auth.check_collection_access(
             collection_name,
@@ -438,7 +469,7 @@ impl TableOfContent {
 
         let shard_selection = ShardSelectorInternal::All;
         collection
-            .get_fuzzy_candidates(
+            .get_fuzzy_candidates_grouped(
                 bind_field,
                 text,
                 params,

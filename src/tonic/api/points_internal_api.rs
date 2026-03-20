@@ -474,11 +474,18 @@ async fn get_fuzzy_candidates_internal(
         .await?;
 
     let response = api::grpc::qdrant::GetFuzzyCandidatesResponseInternal {
-        candidates: candidates
+        candidate_groups: candidates
             .into_iter()
-            .map(|c| api::grpc::qdrant::FuzzyCandidateInternal {
-                term: c.term,
-                weight: c.weight,
+            .map(|group| api::grpc::qdrant::FuzzyCandidateGroupInternal {
+                token: group.token,
+                candidates: group
+                    .candidates
+                    .into_iter()
+                    .map(|c| api::grpc::qdrant::FuzzyCandidateInternal {
+                        term: c.term,
+                        weight: c.weight,
+                    })
+                    .collect(),
             })
             .collect(),
         time: timing.elapsed().as_secs_f64(),

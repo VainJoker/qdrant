@@ -10,7 +10,7 @@ use common::types::TelemetryDetail;
 use parking_lot::Mutex as ParkingMutex;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::index::field_index::CardinalityEstimation;
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates;
 use segment::types::{
     ExtendedPointId, Filter, FuzzyParams, ScoredPoint, SizeStats, SnapshotFormat, WithPayload,
     WithPayloadInterface, WithVector,
@@ -431,10 +431,17 @@ impl ShardOperation for QueueProxyShard {
         search_runtime_handle: &Handle,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
         self.inner_unchecked()
             .wrapped_shard
-            .get_fuzzy_candidates(bind_field, text, params, search_runtime_handle, timeout, hw_measurement_acc)
+            .get_fuzzy_candidates(
+                bind_field,
+                text,
+                params,
+                search_runtime_handle,
+                timeout,
+                hw_measurement_acc,
+            )
             .await
     }
 
@@ -801,9 +808,16 @@ impl ShardOperation for Inner {
         search_runtime_handle: &Handle,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
         self.wrapped_shard
-            .get_fuzzy_candidates(bind_field, text, params, search_runtime_handle, timeout, hw_measurement_acc)
+            .get_fuzzy_candidates(
+                bind_field,
+                text,
+                params,
+                search_runtime_handle,
+                timeout,
+                hw_measurement_acc,
+            )
             .await
     }
 

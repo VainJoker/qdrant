@@ -30,7 +30,9 @@ use segment::common::operation_time_statistics::{
 };
 use segment::data_types::facets::{FacetParams, FacetResponse, FacetValueHit};
 use segment::data_types::order_by::OrderBy;
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::{
+    FuzzyCandidate, FuzzyTokenCandidates,
+};
 use segment::types::{
     ExtendedPointId, Filter, FuzzyParams, ScoredPoint, WithPayload, WithPayloadInterface,
     WithVector,
@@ -1462,7 +1464,7 @@ impl ShardOperation for RemoteShard {
         _search_runtime_handle: &Handle,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
         let processed_timeout = Self::process_read_timeout(timeout, "get_fuzzy_candidates")?;
         let mut timer = ScopeDurationMeasurer::new(&self.telemetry_search_durations);
         timer.set_success(false);
@@ -1496,11 +1498,18 @@ impl ShardOperation for RemoteShard {
         }
 
         let candidates = response
-            .candidates
+            .candidate_groups
             .into_iter()
-            .map(|c| FuzzyCandidate {
-                term: c.term,
-                weight: c.weight,
+            .map(|group| FuzzyTokenCandidates {
+                token: group.token,
+                candidates: group
+                    .candidates
+                    .into_iter()
+                    .map(|c| FuzzyCandidate {
+                        term: c.term,
+                        weight: c.weight,
+                    })
+                    .collect(),
             })
             .collect();
 

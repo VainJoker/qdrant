@@ -1,4 +1,9 @@
+use std::collections::HashMap;
+
 use collection::operations::point_ops::VectorPersisted;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use serde_json::Value;
+use sparse::common::sparse_vector::SparseVector;
 use storage::content_manager::errors::StorageError;
 
 use super::bm25::Bm25;
@@ -73,6 +78,64 @@ pub fn infer_local(
     }
 
     Ok(out)
+}
+
+/// Expands fuzzy FST candidates into a `SparseVector` using a local model's own mapping
+/// strategy. Each local model variant must implement its own expansion here, mirroring the
+/// dispatch in `infer_local`.
+///
+/// # Panics
+/// Panics if `model_name` does not resolve to a known local model.
+pub fn expand_fuzzy_candidates(
+    model_name: &str,
+    candidates: &[FuzzyCandidate],
+    options: Option<HashMap<String, Value>>,
+) -> SparseVector {
+    let Some(model) = LocalModelName::from_str(model_name) else {
+        unreachable!(
+            "Non-local model passed to expand_fuzzy_candidates(). \
+             This can happen if a newly added model wasn't added to expand_fuzzy_candidates()"
+        )
+    };
+
+    match model {
+        LocalModelName::Bm25 => bm25_expand(candidates, options),
+    }
+}
+
+/// BM25 expansion: stems each candidate term using the same tokenization pipeline as
+/// doc/search embed, then maps to a sparse dimension via murmur3 hash.
+/// Takes the max weight per dimension across all candidates.
+fn bm25_expand(
+    candidates: &[FuzzyCandidate],
+    options: Option<HashMap<String, Value>>,
+) -> SparseVector {
+    let bm25_config = InferenceInput::parse_bm25_config(options).unwrap_or_default();
+    let bm25 = Bm25::new(bm25_config);
+    let mut dim_map: HashMap<u32, f32> = HashMap::new();
+
+    for candidate in candidates {
+        if candidate.weight <= 0.0 {
+            continue;
+        }
+        // Stem the candidate term through the same pipeline (lowercase, stopwords, stemming)
+        // that doc_embed/search_embed use, so hashed dimensions match the index.
+        let stemmed_tokens = bm25.tokenize(&candidate.term);
+        for token in &stemmed_tokens {
+            let dim_id = Bm25::compute_token_id(token);
+            dim_map
+                .entry(dim_id)
+                .and_modify(|b| *b = b.max(candidate.weight))
+                .or_insert(candidate.weight);
+        }
+    }
+
+    let mut pairs: Vec<_> = dim_map.into_iter().collect();
+    pairs.sort_by_key(|(idx, _)| *idx);
+    SparseVector {
+        indices: pairs.iter().map(|(i, _)| *i).collect(),
+        values: pairs.iter().map(|(_, v)| *v).collect(),
+    }
 }
 
 /// Returns `true` if the provided `model_name` targets a local model. Local models

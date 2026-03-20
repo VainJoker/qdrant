@@ -272,7 +272,9 @@ impl ShardReplicaSet {
         local_only: bool,
         timeout: Option<Duration>,
         hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate>> {
+    ) -> CollectionResult<
+        Vec<segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates>,
+    > {
         let bind_field = bind_field.to_string();
         let text = text.to_string();
         let params = params.clone();
@@ -285,7 +287,14 @@ impl ShardReplicaSet {
                 let hw_acc = hw_measurement_acc.clone();
                 async move {
                     shard
-                        .get_fuzzy_candidates(&bind_field, &text, &params, &search_runtime, timeout, hw_acc)
+                        .get_fuzzy_candidates(
+                            &bind_field,
+                            &text,
+                            &params,
+                            &search_runtime,
+                            timeout,
+                            hw_acc,
+                        )
                         .await
                 }
                 .boxed()

@@ -17,6 +17,12 @@ pub struct FuzzyCandidate {
     pub weight: f32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct FuzzyTokenCandidates {
+    pub token: String,
+    pub candidates: Vec<FuzzyCandidate>,
+}
+
 impl FuzzyCandidate {
     pub fn new(term: String, len: usize, distance: u32) -> Self {
         let weight = 1.0 - (distance as f32 / (len as f32 + 1.0));

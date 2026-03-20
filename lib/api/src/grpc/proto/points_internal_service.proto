@@ -438,9 +438,14 @@ message FuzzyCandidateInternal {
   float weight = 2;
 }
 
+message FuzzyCandidateGroupInternal {
+  string token = 1;
+  repeated FuzzyCandidateInternal candidates = 2;
+}
+
 // Response containing fuzzy candidates from a shard
 message GetFuzzyCandidatesResponseInternal {
-  repeated FuzzyCandidateInternal candidates = 1;
+  repeated FuzzyCandidateGroupInternal candidate_groups = 1;
   // Time spent to process
   double time = 2;
   optional HardwareUsage usage = 3;

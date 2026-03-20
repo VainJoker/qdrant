@@ -228,6 +228,9 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
         } = self;
 
         let immutable = ImmutableInvertedIndex::from(mutable_index);
+
+        fs::create_dir_all(path.as_path())?;
+
         let immutable_fuzzy_index = match mutable_fuzzy_index {
             Some(index) => {
                 let immutable_index = ImmutableFuzzyIndex::try_from(index)?;
@@ -236,8 +239,6 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
             }
             None => None,
         };
-
-        fs::create_dir_all(path.as_path())?;
 
         MmapInvertedIndex::create(path.clone(), &immutable)?;
 

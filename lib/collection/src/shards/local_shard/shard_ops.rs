@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::facets::{FacetParams, FacetResponse};
 use segment::data_types::order_by::OrderBy;
-use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyTokenCandidates;
 use segment::types::{
     ExtendedPointId, Filter, FuzzyParams, ScoredPoint, WithPayload, WithPayloadInterface,
     WithVector,
@@ -431,20 +431,53 @@ impl ShardOperation for LocalShard {
         bind_field: &str,
         text: &str,
         params: &FuzzyParams,
-        _search_runtime_handle: &Handle,
-        _timeout: Option<Duration>,
+        search_runtime_handle: &Handle,
+        timeout: Option<Duration>,
         _hw_measurement_acc: HwMeasurementAcc,
-    ) -> CollectionResult<Vec<FuzzyCandidate>> {
-        let mut all_candidates: Vec<FuzzyCandidate> = Vec::new();
-        let segments = self.segments.read();
-        for (_id, segment) in segments.iter_original() {
-            let segment_guard = segment.read();
-            let candidates = segment_guard
-                .get_fuzzy_candidates(bind_field, text, params)
-                .map_err(|e| CollectionError::service_error(e.to_string()))?;
-            all_candidates.extend(candidates);
+    ) -> CollectionResult<Vec<FuzzyTokenCandidates>> {
+        use futures::future::try_join_all;
+        use tokio_util::task::AbortOnDropHandle;
+
+        // Clone cheaply-cloneable values so each blocking task is self-contained.
+        let bind_field = bind_field.to_owned();
+        let text = text.to_owned();
+        let params = params.clone();
+
+        // Spawn one blocking task per segment so FST searches run in parallel.
+        let tasks: Vec<AbortOnDropHandle<CollectionResult<Vec<FuzzyTokenCandidates>>>> = {
+            let segments = self.segments.read();
+            segments
+                .iter_original()
+                .map(|(_id, segment)| {
+                    let segment = Arc::clone(segment);
+                    let bind_field = bind_field.clone();
+                    let text = text.clone();
+                    let params = params.clone();
+                    AbortOnDropHandle::new(search_runtime_handle.spawn_blocking(move || {
+                        segment
+                            .read()
+                            .get_fuzzy_candidates_grouped(&bind_field, &text, &params)
+                            .map_err(|e| CollectionError::service_error(e.to_string()))
+                    }))
+                })
+                .collect()
+        };
+
+        let joined = try_join_all(tasks);
+        let per_segment = match timeout {
+            Some(t) => tokio::time::timeout(t, joined)
+                .await
+                .map_err(|_| CollectionError::timeout(t, "get_fuzzy_candidates"))?,
+            None => joined.await,
+        }?;
+
+        // per_segment: Vec<CollectionResult<Vec<FuzzyTokenCandidates>>>
+        // Propagate any per-segment error, then flatten all per-segment token groups.
+        let mut all = Vec::new();
+        for segment_groups in per_segment {
+            all.extend(segment_groups?);
         }
-        Ok(all_candidates)
+        Ok(all)
     }
 
     /// Finishes ongoing update tasks
