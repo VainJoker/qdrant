@@ -8,9 +8,7 @@ use api::rest::schema::VectorInput;
 use collection::operations::point_ops::VectorPersisted;
 use common::counter::hardware_accumulator::HwMeasurementAcc;
 use segment::data_types::vectors::DEFAULT_VECTOR_NAME;
-use segment::index::field_index::full_text_index::fuzzy_index::{
-    FuzzyCandidate, FuzzyTokenCandidates,
-};
+use segment::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use segment::types::FuzzyParams;
 use serde_json::Value;
 use sparse::common::sparse_vector::SparseVector;
@@ -145,8 +143,8 @@ async fn resolve_fuzzy_intent(
         return Ok(None); // No fuzzy config on this sparse vector, silently skip
     };
 
-    let token_groups = toc
-        .get_fuzzy_candidates_grouped(
+    let candidates = toc
+        .get_fuzzy_candidates(
             collection_name,
             &bind_field,
             &intent.text,
@@ -156,8 +154,6 @@ async fn resolve_fuzzy_intent(
             hw_measurement_acc,
         )
         .await?;
-
-    let candidates = flatten_fuzzy_token_groups(token_groups);
 
     if candidates.is_empty() {
         return Ok(None); // No FST candidates — keep original Document query (normal path)
@@ -171,13 +167,6 @@ async fn resolve_fuzzy_intent(
     )
     .await?;
     Ok(Some(sparse))
-}
-
-fn flatten_fuzzy_token_groups(groups: Vec<FuzzyTokenCandidates>) -> Vec<FuzzyCandidate> {
-    groups
-        .into_iter()
-        .flat_map(|group| group.candidates)
-        .collect()
 }
 
 /// Maps FST candidates to a `SparseVector` using the appropriate strategy:
@@ -833,51 +822,6 @@ mod tests {
             pos_2 > 0,
             "single-term match should rank below the two-term match"
         );
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_multi_term_grouped_candidates_preserve_each_token_budget() {
-        let dir = Builder::new()
-            .prefix("fuzzy_grouped_budget")
-            .tempdir()
-            .unwrap();
-        let collection = sparse_fuzzy_collection_fixture(dir.path(), 1).await;
-        insert_bm25_documents(
-            &collection,
-            &[(0, "diamond diamonda"), (1, "international internationals")],
-        )
-        .await;
-        create_fuzzy_text_index(&collection).await;
-
-        let params = FuzzyParams {
-            max_edits: 1,
-            prefix_length: 0,
-            max_expansions: 1,
-        };
-
-        let grouped = collection
-            .get_fuzzy_candidates_grouped(
-                PAYLOAD_FIELD,
-                "diamondx internationalx",
-                &params,
-                &ShardSelectorInternal::All,
-                None,
-                HwMeasurementAcc::disposable(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            grouped.len(),
-            2,
-            "expected one candidate group per query token"
-        );
-        assert_eq!(grouped[0].token, "diamondx");
-        assert_eq!(grouped[1].token, "internationalx");
-        assert_eq!(grouped[0].candidates.len(), 1);
-        assert_eq!(grouped[1].candidates.len(), 1);
-        assert_eq!(grouped[0].candidates[0].term, "diamond");
-        assert_eq!(grouped[1].candidates[0].term, "international");
     }
 
     #[tokio::test(flavor = "multi_thread")]
