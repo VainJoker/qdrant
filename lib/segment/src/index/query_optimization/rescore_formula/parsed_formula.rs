@@ -89,6 +89,11 @@ pub enum ParsedExpression {
         /// Constant to shape the decay function
         lambda: PreciseScoreOrdered,
     },
+    StrDist {
+        field: JsonPath,
+        query: String,
+        func: DistKind,
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Hash)]
@@ -99,6 +104,14 @@ pub enum DecayKind {
     Gauss,
     /// Exponential decay function
     Exp,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Serialize, Hash)]
+pub enum DistKind {
+    /// Levenshtein distance
+    Levenshtein,
+    /// Jaro-Winkler
+    JaroWinlker,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, PartialOrd, Ord)]
