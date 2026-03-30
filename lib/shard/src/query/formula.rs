@@ -82,6 +82,11 @@ pub enum ExpressionInternal {
         midpoint: Option<f32>,
         scale: Option<f32>,
     },
+    StrDist {
+        field: JsonPath,
+        query: String,
+        func: DistKind
+    }
 }
 
 impl ExpressionInternal {
@@ -189,6 +194,18 @@ impl ExpressionInternal {
                     lambda: PreciseScoreOrdered::from(lambda),
                 }
             }
+            ExpressionInternal::StrDist {
+                field,
+                query,
+                func
+            } => {
+                payload_vars.insert(field.clone());
+                ParsedExpression::StrDist {
+                    field,
+                    query,
+                    func
+                }
+            },
         };
 
         Ok(expr)

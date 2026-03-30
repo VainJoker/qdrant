@@ -60,7 +60,7 @@ use crate::grpc::qdrant::{
 };
 use crate::grpc::{
     self, BinaryQuantizationEncoding, BinaryQuantizationQueryEncoding, DecayParamsExpression,
-    DivExpression, GeoDistance, MultExpression, PowExpression, SumExpression,
+    DistParamsExpression, DivExpression, GeoDistance, MultExpression, PowExpression, SumExpression,
 };
 use crate::rest::models::{CollectionsResponse, ShardKeysResponse, VersionInfo};
 use crate::rest::schema as rest;
@@ -3487,6 +3487,16 @@ fn unparse_expression(
                 DecayKind::Lin => Variant::LinDecay(Box::new(params)),
                 DecayKind::Exp => Variant::ExpDecay(Box::new(params)),
                 DecayKind::Gauss => Variant::GaussDecay(Box::new(params)),
+            }
+        }
+        ParsedExpression::StrDist { field, query, func } => {
+            let params = DistParamsExpression {
+                field: field.to_string(),
+                query,
+            };
+            match func {
+                segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::Levenshtein => Variant::Levenshtein(params),
+                segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::JaroWinlker => Variant::JaroWinkler(params),
             }
         }
     };
