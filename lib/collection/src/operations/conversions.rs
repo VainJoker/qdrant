@@ -31,8 +31,8 @@ use super::cluster_ops::{ReplicatePoints, ReplicatePointsOperation, ReshardingDi
 use super::consistency_params::ReadConsistency;
 use super::types::{
     CollectionConfig, ContextExamplePair, CoreSearchRequest, Datatype, DiscoverRequestInternal,
-    FuzzySearchConfig, GroupsResult, PointGroup, RecommendExample, RecommendGroupsRequestInternal,
-    ReshardingInfo, SparseIndexParams, SparseVectorParams, SparseVectorsConfig, VectorParamsDiff,
+    GroupsResult, PointGroup, RecommendExample, RecommendGroupsRequestInternal, ReshardingInfo,
+    SparseIndexParams, SparseVectorParams, SparseVectorsConfig, VectorParamsDiff,
     VectorsConfigDiff,
 };
 use crate::config::{
@@ -794,11 +794,7 @@ impl TryFrom<api::grpc::qdrant::SparseVectorParams> for SparseVectorParams {
     fn try_from(
         sparse_vector_params: api::grpc::qdrant::SparseVectorParams,
     ) -> Result<Self, Self::Error> {
-        let api::grpc::qdrant::SparseVectorParams {
-            index,
-            modifier,
-            fuzzy,
-        } = sparse_vector_params;
+        let api::grpc::qdrant::SparseVectorParams { index, modifier } = sparse_vector_params;
         Ok(Self {
             index: index
                 .map(|index_config| -> Result<_, Status> {
@@ -814,20 +810,13 @@ impl TryFrom<api::grpc::qdrant::SparseVectorParams> for SparseVectorParams {
                     // XXX: Invalid values silently converted to None
                     api::grpc::qdrant::Modifier::try_from(x).ok())
                 .map(Modifier::from),
-            fuzzy: fuzzy.map(|f| FuzzySearchConfig {
-                fuzzy_bind_field: f.fuzzy_bind_field,
-            }),
         })
     }
 }
 
 impl From<SparseVectorParams> for api::grpc::qdrant::SparseVectorParams {
     fn from(sparse_vector_params: SparseVectorParams) -> Self {
-        let SparseVectorParams {
-            index,
-            modifier,
-            fuzzy,
-        } = sparse_vector_params;
+        let SparseVectorParams { index, modifier } = sparse_vector_params;
         Self {
             index: index.map(|index_config| {
                 let SparseIndexParams {
@@ -842,9 +831,6 @@ impl From<SparseVectorParams> for api::grpc::qdrant::SparseVectorParams {
                 }
             }),
             modifier: modifier.map(|modifier| api::grpc::qdrant::Modifier::from(modifier) as i32),
-            fuzzy: fuzzy.map(|f| api::grpc::qdrant::FuzzySearchConfig {
-                fuzzy_bind_field: f.fuzzy_bind_field,
-            }),
         }
     }
 }

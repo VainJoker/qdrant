@@ -615,11 +615,6 @@ pub struct SearchParams {
     #[validate(nested)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acorn: Option<AcornSearchParams>,
-
-    /// Fuzzy sparse vector search params. When set, enables fuzzy term expansion for sparse vector queries.
-    #[serde(default)]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub fuzzy: Option<FuzzyParams>,
 }
 
 /// Configuration for vectors.

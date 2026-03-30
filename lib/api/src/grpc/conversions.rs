@@ -60,7 +60,7 @@ use crate::grpc::qdrant::{
 };
 use crate::grpc::{
     self, BinaryQuantizationEncoding, BinaryQuantizationQueryEncoding, DecayParamsExpression,
-    DivExpression, FuzzySearchParams, GeoDistance, MultExpression, PowExpression, SumExpression,
+    DivExpression, GeoDistance, MultExpression, PowExpression, SumExpression,
 };
 use crate::rest::models::{CollectionsResponse, ShardKeysResponse, VersionInfo};
 use crate::rest::schema as rest;
@@ -921,7 +921,6 @@ impl From<SearchParams> for segment::types::SearchParams {
             quantization,
             indexed_only,
             acorn,
-            fuzzy,
         } = params;
         Self {
             hnsw_ef: hnsw_ef.map(|x| x as usize),
@@ -929,11 +928,6 @@ impl From<SearchParams> for segment::types::SearchParams {
             quantization: quantization.map(|q| q.into()),
             indexed_only: indexed_only.unwrap_or(false),
             acorn: acorn.map(segment::types::AcornSearchParams::from),
-            fuzzy: fuzzy.map(|f| segment::types::FuzzyParams {
-                max_edits: f.max_edits.unwrap_or(1) as u8,
-                prefix_length: f.prefix_length.unwrap_or(0) as u8,
-                max_expansions: f.max_expansions.unwrap_or(30) as u8,
-            }),
         }
     }
 }
@@ -946,7 +940,6 @@ impl From<segment::types::SearchParams> for SearchParams {
             quantization,
             indexed_only,
             acorn,
-            fuzzy,
         } = params;
         Self {
             hnsw_ef: hnsw_ef.map(|x| x as u64),
@@ -954,11 +947,6 @@ impl From<segment::types::SearchParams> for SearchParams {
             quantization: quantization.map(|q| q.into()),
             indexed_only: Some(indexed_only),
             acorn: acorn.map(AcornSearchParams::from),
-            fuzzy: fuzzy.map(|f| FuzzySearchParams {
-                max_edits: Some(f.max_edits as u32),
-                prefix_length: Some(f.prefix_length as u32),
-                max_expansions: Some(f.max_expansions as u32),
-            }),
         }
     }
 }

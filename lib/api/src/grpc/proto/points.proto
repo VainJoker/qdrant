@@ -461,18 +461,6 @@ message SearchParams {
 
   // ACORN search params
   optional AcornSearchParams acorn = 5;
-
-  // Fuzzy sparse search params
-  optional FuzzySearchParams fuzzy = 6;
-}
-
-message FuzzySearchParams {
-  // Max Levenshtein edit distance (0..=2). Default: 1
-  optional uint32 max_edits = 1;
-  // Number of initial characters that must match exactly. Default: 0
-  optional uint32 prefix_length = 2;
-  // Max number of similar terms to collect per query token. Default: 30
-  optional uint32 max_expansions = 3;
 }
 
 message SearchPoints {
