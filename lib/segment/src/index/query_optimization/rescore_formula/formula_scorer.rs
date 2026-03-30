@@ -6,6 +6,7 @@ use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::{PointOffsetType, ScoreType};
 use geo::{Distance, Haversine};
 use serde_json::Value;
+use strsim::{jaro_winkler, normalized_levenshtein};
 
 use super::parsed_formula::{
     DatetimeExpression, DecayKind, ParsedExpression, ParsedFormula, PreciseScore, VariableId,
@@ -54,6 +55,12 @@ impl FriendlyName for GeoPoint {
 impl FriendlyName for DateTimePayloadType {
     fn friendly_name() -> &'static str {
         "datetime"
+    }
+}
+
+impl FriendlyName for std::string::String {
+    fn friendly_name() -> &'static str {
+        "string"
     }
 }
 
@@ -299,6 +306,22 @@ impl FormulaScorer<'_> {
 
                 Ok(decay)
             }
+            ParsedExpression::StrDist {
+                field,
+                query,
+                func
+            } => {
+                let value = self.get_parsed_payload_value(
+                    field,
+                    point_id,
+                    serde_json::from_value::<String>,
+                )?;
+
+                match func {
+                    super::parsed_formula::DistKind::Levenshtein => Ok(normalized_levenshtein(&value, query)),
+                    super::parsed_formula::DistKind::JaroWinlker => Ok(jaro_winkler(&value, query)),
+                }
+            },
         }
     }
 

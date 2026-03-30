@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use levenshtein::levenshtein;
+use strsim::levenshtein;
 
 use super::FuzzyIndex;
 use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;

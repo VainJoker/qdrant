@@ -928,6 +928,7 @@ pub enum Expression {
     LinDecay(LinDecayExpression),
     ExpDecay(ExpDecayExpression),
     GaussDecay(GaussDecayExpression),
+    StrDist(StrDistExpression)
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1059,6 +1060,25 @@ pub struct DecayParamsExpression {
     pub scale: Option<f32>,
     /// The midpoint of the decay. Should be between 0 and 1.Defaults to 0.5. Output will be this value when `|x - target| == scale`.
     pub midpoint: Option<f32>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct StrDistExpression {
+    pub str_dist: StrDistParamsExpression
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum StrDistFunc {
+    Levenshtein,
+    JaroWinkler,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Validate)]
+pub struct StrDistParamsExpression {
+    pub field: JsonPath,
+    pub query: String,
+    pub func: StrDistFunc
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
