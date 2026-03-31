@@ -12,7 +12,9 @@ use ordered_float::Float;
 use segment::common::operation_error::OperationError;
 use segment::data_types::modifier::Modifier;
 use segment::data_types::query_context::{FormulaContext, QueryContext, SegmentQueryContext};
-use segment::data_types::vectors::QueryVector;
+use segment::data_types::vectors::{Named, QueryVector};
+use segment::index::field_index::FieldIndex;
+use segment::json_path::JsonPath;
 use segment::types::{
     Filter, Indexes, PointIdType, ScoredPoint, SearchParams, SegmentConfig, VectorName,
     WithPayload, WithPayloadInterface, WithVector,
@@ -504,6 +506,48 @@ impl SegmentsSearcher {
 
         Ok(top)
     }
+
+    pub fn resolve_fuzzy_searches(
+        mut core_request: Arc<CoreSearchRequestBatch>,
+        collection_config: &CollectionConfigInternal,
+    ) -> CollectionResult<Arc<CoreSearchRequestBatch>> {
+        if !core_request
+            .searches
+            .iter()
+            .any(|req| matches!(req.query, QueryEnum::NearestWithFuzzy(_)))
+        {
+            return Ok(core_request);
+        }
+
+        let sparse_vectors = collection_config.params.sparse_vectors.as_ref();
+
+        let batch = Arc::make_mut(&mut core_request);
+
+        for req in &mut batch.searches {
+            let QueryEnum::NearestWithFuzzy(nwf) = &mut req.query else {
+                continue;
+            };
+
+            let Some(bind_field_str) = sparse_vectors
+                .and_then(|sv| sv.get(nwf.get_name()))
+                .and_then(|params| params.fuzzy.as_ref())
+                .map(|fc| fc.fuzzy_bind_field.as_str())
+            else {
+                continue;
+            };
+
+            let bind_field: JsonPath = bind_field_str.parse().map_err(|_| {
+                CollectionError::bad_request(format!(
+                    "Invalid fuzzy_bind_field '{}'",
+                    bind_field_str
+                ))
+            })?;
+
+            nwf.query.fuzzy.field_name = Some(bind_field);
+        }
+
+        Ok(core_request)
+    }
 }
 
 #[derive(PartialEq, Default, Debug)]
@@ -526,6 +570,7 @@ impl From<&QueryEnum> for SearchType {
             QueryEnum::Discover(_) => Self::Discover,
             QueryEnum::Context(_) => Self::Context,
             QueryEnum::FeedbackNaive(_) => Self::FeedbackNaive,
+            QueryEnum::NearestWithFuzzy(_) => Self::Nearest,
         }
     }
 }
@@ -620,6 +665,39 @@ fn search_in_segment(
             with_vector: search_query.with_vector.clone().unwrap_or_default(),
             top: search_query.limit + search_query.offset,
             params: search_query.params.as_ref(),
+        };
+
+        match &search_query.query {
+            QueryEnum::NearestWithFuzzy(named) => {
+                let fuzzy_intent = named.query.fuzzy.clone();
+                let vector_name = named.using.clone();
+                let fuzzy_field = fuzzy_intent.field_name.clone().unwrap();
+                let read_segment = segment.get().read();
+                let payload_index = read_segment.payload_index();
+                let borrowed = payload_index.borrow();
+                let field_indexes = borrowed.field_indexes.get(&fuzzy_field).unwrap();
+
+                for field_index in field_indexes {
+                    if let FieldIndex::FullTextIndex(text_index) = field_index {
+                        let candidates = text_index
+                            .fuzzy_candidates(&fuzzy_intent.text, Some(&fuzzy_intent.params));
+                        // TODO: 在此处进行 sparse vector 处理
+
+                        let batch = collect_query_request(&request);
+                        let (inferred, usage) = BatchAccumInferred::from_batch_accum(
+                            batch,
+                            InferenceType::Search,
+                            inference_params,
+                        )
+                        .await?;
+                        let data = InferenceData::Document(doc);
+                        let vector = inferred.get_vector(&data).ok_or_else(|| {
+                            StorageError::inference_error("Missing inferred vector for document")
+                        })?;
+                    }
+                }
+            }
+            _ => {}
         };
 
         let query = search_query.query.clone().into();

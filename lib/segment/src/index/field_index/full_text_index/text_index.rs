@@ -26,6 +26,7 @@ use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDelet
 #[cfg(feature = "rocksdb")]
 use crate::common::rocksdb_wrapper::DatabaseColumnWrapper;
 use crate::data_types::index::TextIndexParams;
+use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::{
     CardinalityEstimation, FieldIndexBuilderTrait, PayloadBlockCondition, PayloadFieldIndex,
@@ -579,6 +580,33 @@ impl FullTextIndex {
                 is_on_disk: index.is_on_disk(),
             },
         }
+    }
+
+    pub fn fuzzy_candidates(
+        &self,
+        text: &str,
+        params: Option<&FuzzyParams>,
+    ) -> Option<Vec<FuzzyCandidate>> {
+        let fuzzy_index: &dyn FuzzyIndex = match self {
+            Self::Mutable(index) => index.get_fuzzy_index()?,
+            Self::Immutable(index) => index.get_fuzzy_index()?,
+            Self::Mmap(index) => index.get_fuzzy_index()?,
+        };
+
+        let default_params = FuzzyParams::default();
+        let params = params.unwrap_or(&default_params);
+        let mut candidates = Vec::new();
+
+        self.get_tokenizer().tokenize_query(text, |token| {
+            candidates.extend(fuzzy_index.search(&token, params).into_iter().map(|c| {
+                FuzzyCandidate {
+                    term: c.term,
+                    weight: c.weight,
+                }
+            }));
+        });
+
+        Some(candidates)
     }
 }
 

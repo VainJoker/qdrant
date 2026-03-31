@@ -7,5 +7,7 @@ pub mod stop_words;
 pub mod text_index;
 pub mod tokenizers;
 
+pub use fuzzy_index::FuzzyCandidate;
+
 #[cfg(test)]
 mod tests;

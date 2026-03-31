@@ -8,11 +8,12 @@ use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, NamedQuery, VectorIntern
 use segment::index::query_optimization::rescore_formula::parsed_formula::ParsedFormula;
 use segment::json_path::JsonPath;
 use segment::types::{
-    Condition, ExtendedPointId, Filter, HasIdCondition, PointIdType, SearchParams, VectorName,
-    VectorNameBuf, WithPayloadInterface, WithVector,
+    Condition, ExtendedPointId, Filter, FuzzyIntent, FuzzyParams, HasIdCondition, PointIdType,
+    SearchParams, VectorName, VectorNameBuf, WithPayloadInterface, WithVector,
 };
 use segment::vector_storage::query::{
-    ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, NaiveFeedbackCoefficients, RecoQuery,
+    ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, FuzzyQuery, NaiveFeedbackCoefficients,
+    RecoQuery,
 };
 use serde::Serialize;
 use shard::query::query_enum::QueryEnum;
@@ -168,6 +169,7 @@ pub enum VectorQuery<T> {
     Discover(DiscoveryQuery<T>),
     Context(ContextQuery<T>),
     Feedback(FeedbackInternal<T>),
+    NearestWithFuzzy(NearestWithFuzzy<T>),
 }
 
 impl<T> VectorQuery<T> {
@@ -182,6 +184,7 @@ impl<T> VectorQuery<T> {
             VectorQuery::Discover(query) => Box::new(query.flat_iter()),
             VectorQuery::Context(query) => Box::new(query.flat_iter()),
             VectorQuery::Feedback(query) => Box::new(query.flat_iter()),
+            VectorQuery::NearestWithFuzzy(query) => Box::new(std::iter::once(&query.nearest)),
         }
     }
 }
@@ -190,6 +193,12 @@ impl<T> VectorQuery<T> {
 pub struct NearestWithMmr<T> {
     pub nearest: T,
     pub mmr: Mmr,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NearestWithFuzzy<T> {
+    pub nearest: T,
+    pub fuzzy: FuzzyIntent,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -359,6 +368,15 @@ impl VectorQuery<VectorInputInternal> {
                     strategy,
                 }))
             }
+            VectorQuery::NearestWithFuzzy(NearestWithFuzzy { nearest, fuzzy }) => {
+                let nearest = ids_to_vectors
+                    .resolve_reference(lookup_collection, lookup_vector_name, nearest)
+                    .ok_or_else(|| vector_not_found_error(lookup_vector_name))?;
+                Ok(VectorQuery::NearestWithFuzzy(NearestWithFuzzy {
+                    nearest,
+                    fuzzy,
+                }))
+            }
         }
     }
 
@@ -443,6 +461,9 @@ impl VectorQuery<VectorInternal> {
                     .iter_mut()
                     .for_each(|item| item.vector.preprocess());
             }
+            VectorQuery::NearestWithFuzzy(NearestWithFuzzy { nearest, fuzzy: _ }) => {
+                nearest.preprocess();
+            }
         }
         self
     }
@@ -503,6 +524,15 @@ impl VectorQuery<VectorInternal> {
                     using,
                 )),
             },
+            VectorQuery::NearestWithFuzzy(NearestWithFuzzy { nearest, fuzzy }) => {
+                QueryEnum::NearestWithFuzzy(NamedQuery::new(
+                    FuzzyQuery {
+                        traget: nearest,
+                        fuzzy,
+                    },
+                    using,
+                ))
+            }
         };
 
         Ok(ScoringQuery::Vector(query_enum))

@@ -2493,6 +2493,14 @@ pub struct FuzzyParams {
     pub max_expansions: u8,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+pub struct FuzzyIntent {
+    pub text: String,
+    pub model: String,
+    pub params: FuzzyParams,
+    pub field_name: Option<JsonPath>,
+}
+
 impl Default for FuzzyParams {
     fn default() -> Self {
         Self {

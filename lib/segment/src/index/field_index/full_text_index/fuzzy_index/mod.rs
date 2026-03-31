@@ -12,7 +12,6 @@ use crate::types::FuzzyParams;
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuzzyCandidate {
     pub term: String,
-    // pub token_id: TokenId,
     /// Weight of the fuzzy match between the query term and the matched dictionary term.
     pub weight: f32,
 }
@@ -20,11 +19,7 @@ pub struct FuzzyCandidate {
 impl FuzzyCandidate {
     pub fn new(term: String, len: usize, distance: u32) -> Self {
         let weight = 1.0 - (distance as f32 / (len as f32 + 1.0));
-        Self {
-            term,
-            // token_id,
-            weight,
-        }
+        Self { term, weight }
     }
 }
 

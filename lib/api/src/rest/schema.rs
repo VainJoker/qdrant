@@ -11,8 +11,8 @@ use segment::data_types::index::{StemmingAlgorithm, StopwordsInterface, Tokenize
 use segment::data_types::order_by::OrderBy;
 use segment::json_path::JsonPath;
 use segment::types::{
-    Condition, Filter, GeoPoint, IntPayloadType, Payload, PointIdType, SearchParams, ShardKey,
-    VectorNameBuf, WithPayloadInterface, WithVector,
+    Condition, Filter, FuzzyParams, GeoPoint, IntPayloadType, Payload, PointIdType, SearchParams,
+    ShardKey, VectorNameBuf, WithPayloadInterface, WithVector,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -341,6 +341,9 @@ pub struct Document {
     /// See model cards for available options.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub options: Option<DocumentOptions>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fuzzy: Option<FuzzyParams>,
 }
 
 /// WARN: Work-in-progress, unimplemented

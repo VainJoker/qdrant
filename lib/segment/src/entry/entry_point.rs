@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use ahash::AHashMap;
+use atomic_refcell::{AtomicRef, AtomicRefCell};
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::TelemetryDetail;
 use uuid::Uuid;
@@ -19,6 +20,7 @@ use crate::data_types::segment_record::SegmentRecord;
 use crate::data_types::vectors::{QueryVector, VectorInternal};
 use crate::entry::snapshot_entry::SnapshotEntry;
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
+use crate::index::struct_payload_index::StructPayloadIndex;
 use crate::json_path::JsonPath;
 use crate::telemetry::SegmentTelemetry;
 use crate::types::{
@@ -337,6 +339,8 @@ pub trait NonAppendableSegmentEntry: SnapshotEntry {
     fn get_telemetry_data(&self, detail: TelemetryDetail) -> SegmentTelemetry;
 
     fn fill_query_context(&self, query_context: &mut QueryContext);
+
+    fn payload_index(&self) -> Arc<AtomicRefCell<StructPayloadIndex>>;
 }
 
 /// Define mutable operations which can be performed with Segment or Segment-like entity.

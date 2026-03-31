@@ -3,13 +3,15 @@ use api::rest::schema as rest;
 use collection::lookup::WithLookup;
 use collection::operations::universal_query::collection_query::{
     CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, FeedbackInternal,
-    FeedbackStrategy, Mmr, NearestWithMmr, Query, VectorInputInternal, VectorQuery,
+    FeedbackStrategy, Mmr, NearestWithFuzzy, NearestWithMmr, Query, VectorInputInternal,
+    VectorQuery,
 };
 use collection::operations::universal_query::formula::FormulaInternal;
 use collection::operations::universal_query::shard_query::{FusionInternal, SampleInternal};
 use ordered_float::OrderedFloat;
 use segment::data_types::order_by::OrderBy;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, MultiDenseVectorInternal, VectorInternal};
+use segment::types::FuzzyIntent;
 use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, RecoQuery,
 };
@@ -200,22 +202,43 @@ fn convert_query_with_inferred(
 ) -> StorageResult<Query> {
     let query = rest::Query::from(query);
     match query {
-        rest::Query::Nearest(rest::NearestQuery { nearest, mmr }) => {
-            let vector = convert_vector_input_with_inferred(nearest, inferred)?;
-
-            if let Some(mmr) = mmr {
-                let mmr = Mmr {
-                    diversity: mmr.diversity,
-                    candidates_limit: mmr.candidates_limit,
-                };
-                Ok(Query::Vector(VectorQuery::NearestWithMmr(NearestWithMmr {
-                    nearest: vector,
-                    mmr,
-                })))
-            } else {
-                Ok(Query::Vector(VectorQuery::Nearest(vector)))
+        rest::Query::Nearest(rest::NearestQuery { nearest, mmr }) => match nearest {
+            rest::VectorInput::Document(doc) => {
+                let text = doc.text.clone();
+                let model = doc.model.clone();
+                let fuzzy = doc.fuzzy.clone();
+                let vector = convert_vector_input_with_inferred(
+                    rest::VectorInput::Document(doc.clone()),
+                    inferred,
+                )?;
+                return Ok(Query::Vector(VectorQuery::NearestWithFuzzy(
+                    NearestWithFuzzy {
+                        nearest: vector,
+                        fuzzy: FuzzyIntent {
+                            text,
+                            model,
+                            params: fuzzy.unwrap_or_default(),
+                            field_name: None,
+                        },
+                    },
+                )));
             }
-        }
+            _ => {
+                let vector = convert_vector_input_with_inferred(nearest, inferred)?;
+                if let Some(mmr) = mmr {
+                    let mmr = Mmr {
+                        diversity: mmr.diversity,
+                        candidates_limit: mmr.candidates_limit,
+                    };
+                    Ok(Query::Vector(VectorQuery::NearestWithMmr(NearestWithMmr {
+                        nearest: vector,
+                        mmr,
+                    })))
+                } else {
+                    Ok(Query::Vector(VectorQuery::Nearest(vector)))
+                }
+            }
+        },
         rest::Query::Recommend(recommend) => {
             let rest::RecommendInput {
                 positive,
@@ -368,6 +391,7 @@ mod tests {
             text: text.to_string(),
             model: "test-model".to_string(),
             options: Default::default(),
+            fuzzy: None,
         }
     }
 

@@ -1,6 +1,7 @@
 use segment::data_types::vectors::{MultiDenseVectorInternal, NamedQuery, VectorInternal};
+use segment::types::FuzzyIntent;
 use segment::vector_storage::query::{
-    ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, NaiveFeedbackCoefficients,
+    ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, FuzzyQuery, NaiveFeedbackCoefficients,
     NaiveFeedbackQuery, RecoQuery,
 };
 use shard::query::query_enum::QueryEnum;
@@ -114,6 +115,9 @@ impl Generalizer for QueryEnum {
             QueryEnum::Context(context) => QueryEnum::Context(context.remove_details()),
             QueryEnum::FeedbackNaive(feedback) => {
                 QueryEnum::FeedbackNaive(feedback.remove_details())
+            }
+            QueryEnum::NearestWithFuzzy(fuzzy) => {
+                QueryEnum::NearestWithFuzzy(fuzzy.remove_details())
             }
         }
     }
@@ -231,6 +235,16 @@ impl Generalizer for NaiveFeedbackCoefficients {
             a: 0.0.into(),
             b: 0.0.into(),
             c: 0.0.into(),
+        }
+    }
+}
+
+impl<T: Generalizer> Generalizer for FuzzyQuery<T> {
+    fn remove_details(&self) -> Self {
+        let FuzzyQuery { traget, .. } = self;
+        Self {
+            traget: traget.remove_details(),
+            fuzzy: FuzzyIntent::default(),
         }
     }
 }

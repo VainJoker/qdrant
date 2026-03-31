@@ -10,10 +10,16 @@ impl From<rest::Document> for grpc::Document {
             text,
             model,
             options,
+            fuzzy,
         } = document;
         Self {
             text,
             model,
+            fuzzy: fuzzy.map(|f| grpc::FuzzyParams {
+                max_edits: Some(f.max_edits as u32),
+                prefix_length: Some(f.prefix_length as u32),
+                max_expansions: Some(f.max_expansions as u32),
+            }),
             options: options
                 .map(DocumentOptions::into_options)
                 .map(dict_to_proto)
@@ -30,10 +36,16 @@ impl TryFrom<grpc::Document> for rest::Document {
             text,
             model,
             options,
+            fuzzy,
         } = document;
         Ok(Self {
             text,
             model,
+            fuzzy: fuzzy.map(|f| segment::types::FuzzyParams {
+                max_edits: f.max_edits.unwrap_or(0) as u8,
+                prefix_length: f.prefix_length.unwrap_or(0) as u8,
+                max_expansions: f.max_expansions.unwrap_or(0) as u8,
+            }),
             options: Some(DocumentOptions::Common(proto_dict_to_json(options)?)),
         })
     }

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use common::counter::hardware_accumulator::HwMeasurementAcc;
+use segment::json_path::JsonPath;
 use segment::types::ScoredPoint;
 use shard::common::stopping_guard::StoppingGuard;
 use shard::query::query_enum::QueryEnum;
@@ -10,6 +11,7 @@ use tokio::runtime::Handle;
 
 use super::LocalShard;
 use crate::collection_manager::segments_searcher::SegmentsSearcher;
+use crate::config::CollectionConfigInternal;
 use crate::operations::types::{CollectionError, CollectionResult};
 
 // Chunk requests for parallelism in certain scenarios
@@ -105,8 +107,12 @@ impl LocalShard {
         is_stopped_guard: &StoppingGuard,
     ) -> CollectionResult<Vec<Vec<ScoredPoint>>> {
         let start = std::time::Instant::now();
+        let collection_config = self.collection_config.read().await;
+
+        let core_request =
+            SegmentsSearcher::resolve_fuzzy_searches(core_request, &collection_config)?;
+
         let (query_context, collection_params) = {
-            let collection_config = self.collection_config.read().await;
             let query_context_opt = SegmentsSearcher::prepare_query_context(
                 self.segments.clone(),
                 &core_request,
@@ -154,7 +160,7 @@ impl LocalShard {
                 let distance = collection_params.get_distance(vector_name).unwrap();
                 let processed_res = vector_res.into_iter().map(|mut scored_point| {
                     match req.query {
-                        QueryEnum::Nearest(_) => {
+                        QueryEnum::Nearest(_) | QueryEnum::NearestWithFuzzy(_) => {
                             scored_point.score = distance.postprocess_score(scored_point.score);
                         }
                         // Don't post-process if we are dealing with custom scoring

@@ -64,6 +64,8 @@ message Document {
   string model = 3;
   // Model options
   map<string, Value> options = 4;
+  // Fuzzy params
+  FuzzyParams fuzzy = 5;
 }
 
 message Image {

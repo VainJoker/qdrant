@@ -5,14 +5,15 @@ use api::grpc::{InferenceUsage, qdrant as grpc};
 use api::rest::{self, LookupLocation, RecommendStrategy};
 use collection::operations::universal_query::collection_query::{
     CollectionPrefetch, CollectionQueryGroupsRequest, CollectionQueryRequest, FeedbackInternal,
-    FeedbackStrategy, Mmr, NearestWithMmr, Query, VectorInputInternal, VectorQuery,
+    FeedbackStrategy, Mmr, NearestWithFuzzy, NearestWithMmr, Query, VectorInputInternal,
+    VectorQuery,
 };
 use collection::operations::universal_query::formula::FormulaInternal;
 use collection::operations::universal_query::shard_query::{FusionInternal, SampleInternal};
 use ordered_float::OrderedFloat;
 use segment::data_types::order_by::OrderBy;
 use segment::data_types::vectors::{DEFAULT_VECTOR_NAME, MultiDenseVectorInternal, VectorInternal};
-use segment::types::{Filter, PointIdType, SearchParams};
+use segment::types::{Filter, FuzzyIntent, FuzzyParams, PointIdType, SearchParams};
 use segment::vector_storage::query::{
     ContextPair, ContextQuery, DiscoveryQuery, FeedbackItem, RecoQuery,
 };
@@ -229,10 +230,29 @@ fn convert_query_with_inferred(
         .ok_or_else(|| Status::invalid_argument("Query variant is missing"))?;
 
     let query = match variant {
-        Variant::Nearest(nearest) => {
-            let vector = convert_vector_input_with_inferred(nearest, inferred)?;
-            Query::Vector(VectorQuery::Nearest(vector))
-        }
+        Variant::Nearest(nearest) => match nearest.variant {
+            Some(grpc::vector_input::Variant::Document(ref doc)) => {
+                let vector = convert_vector_input_with_inferred(nearest.clone(), inferred)?;
+                return Ok(Query::Vector(VectorQuery::NearestWithFuzzy(
+                    NearestWithFuzzy {
+                        nearest: vector,
+                        fuzzy: FuzzyIntent {
+                            text: doc.text.clone(),
+                            model: doc.model.clone(),
+                            params: doc
+                                .fuzzy
+                                .clone()
+                                .map_or(FuzzyParams::default(), |f| f.into()),
+                            field_name: None,
+                        },
+                    },
+                )));
+            }
+            _ => {
+                let vector = convert_vector_input_with_inferred(nearest, inferred)?;
+                Query::Vector(VectorQuery::Nearest(vector))
+            }
+        },
         Variant::Recommend(recommend) => {
             let RecommendInput {
                 positive,
@@ -466,6 +486,7 @@ mod tests {
             text: "test".to_string(),
             model: "test-model".to_string(),
             options: HashMap::new(),
+            fuzzy: None,
         }
     }
 

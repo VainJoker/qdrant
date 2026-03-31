@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use ahash::AHashMap;
+use atomic_refcell::AtomicRefCell;
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::fs::safe_delete_with_suffix;
 use common::types::TelemetryDetail;
@@ -26,6 +27,7 @@ use crate::data_types::vectors::{QueryVector, VectorInternal};
 use crate::entry::entry_point::{NonAppendableSegmentEntry, SegmentEntry};
 use crate::id_tracker::IdTracker;
 use crate::index::field_index::{CardinalityEstimation, FieldIndex};
+use crate::index::struct_payload_index::StructPayloadIndex;
 use crate::index::{BuildIndexResult, PayloadIndex, VectorIndex};
 use crate::json_path::JsonPath;
 use crate::payload_storage::PayloadStorage;
@@ -867,6 +869,10 @@ impl NonAppendableSegmentEntry for Segment {
                 vector_index.fill_idf_statistics(idf, &hw_counter);
             }
         }
+    }
+
+    fn payload_index(&self) -> Arc<AtomicRefCell<StructPayloadIndex>> {
+        self.payload_index.clone()
     }
 }
 

@@ -4952,6 +4952,9 @@ pub struct Document {
     /// Model options
     #[prost(map = "string, message", tag = "4")]
     pub options: ::std::collections::HashMap<::prost::alloc::string::String, Value>,
+    /// Fuzzy params
+    #[prost(message, optional, tag = "5")]
+    pub fuzzy: ::core::option::Option<FuzzyParams>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

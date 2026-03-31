@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use ahash::AHashMap;
+use atomic_refcell::{AtomicRef, AtomicRefCell};
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::TelemetryDetail;
 use segment::common::Flusher;
@@ -18,6 +19,7 @@ use segment::data_types::segment_record::SegmentRecord;
 use segment::data_types::vectors::{QueryVector, VectorInternal};
 use segment::entry::entry_point::{NonAppendableSegmentEntry, SegmentEntry};
 use segment::index::field_index::{CardinalityEstimation, FieldIndex};
+use segment::index::struct_payload_index::StructPayloadIndex;
 use segment::json_path::JsonPath;
 use segment::telemetry::SegmentTelemetry;
 use segment::types::*;
@@ -701,6 +703,13 @@ impl NonAppendableSegmentEntry for ProxySegment {
             .get()
             .read()
             .fill_query_context(query_context)
+    }
+
+    fn payload_index(&self) -> Arc<AtomicRefCell<StructPayloadIndex>> {
+        match &self.wrapped_segment {
+            LockedSegment::Original(raw_segment) => raw_segment.read().payload_index(),
+            LockedSegment::Proxy(proxy) => proxy.read().payload_index(),
+        }
     }
 }
 

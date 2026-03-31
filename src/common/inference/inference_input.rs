@@ -43,6 +43,7 @@ impl From<InferenceData> for InferenceInput {
                     text,
                     model,
                     options,
+                    fuzzy: _,
                 } = doc;
                 InferenceInput {
                     data: Value::String(text),

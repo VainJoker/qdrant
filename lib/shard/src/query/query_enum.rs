@@ -14,6 +14,7 @@ pub enum QueryEnum {
     Discover(NamedQuery<DiscoveryQuery<VectorInternal>>),
     Context(NamedQuery<ContextQuery<VectorInternal>>),
     FeedbackNaive(NamedQuery<NaiveFeedbackQuery<VectorInternal>>),
+    NearestWithFuzzy(NamedQuery<FuzzyQuery<VectorInternal>>),
 }
 
 impl QueryEnum {
@@ -25,13 +26,14 @@ impl QueryEnum {
             QueryEnum::Discover(discovery_query) => discovery_query.get_name(),
             QueryEnum::Context(context_query) => context_query.get_name(),
             QueryEnum::FeedbackNaive(feedback_query) => feedback_query.get_name(),
+            QueryEnum::NearestWithFuzzy(fuzzy_query) => fuzzy_query.get_name(),
         }
     }
 
     /// Only when the distance is the scoring, this will return true.
     pub fn is_distance_scored(&self) -> bool {
         match self {
-            QueryEnum::Nearest(_) => true,
+            QueryEnum::Nearest(_) | QueryEnum::NearestWithFuzzy(_) => true,
             QueryEnum::RecommendBestScore(_)
             | QueryEnum::RecommendSumScores(_)
             | QueryEnum::Discover(_)
@@ -46,6 +48,14 @@ impl QueryEnum {
                 VectorInternal::Sparse(sparse_vector) => f(named.get_name(), sparse_vector),
                 VectorInternal::Dense(_) | VectorInternal::MultiDense(_) => {}
             },
+            QueryEnum::NearestWithFuzzy(fuzzy_query) => {
+                let name = fuzzy_query.get_name();
+                let vector = &fuzzy_query.query.traget;
+                match vector {
+                    VectorInternal::Sparse(sparse_vector) => f(name, sparse_vector),
+                    VectorInternal::Dense(_) | VectorInternal::MultiDense(_) => {}
+                }
+            }
             QueryEnum::RecommendBestScore(reco_query)
             | QueryEnum::RecommendSumScores(reco_query) => {
                 let name = reco_query.get_name();
@@ -100,6 +110,7 @@ impl QueryEnum {
             QueryEnum::Discover(named_query) => search_cost(named_query.query.flat_iter()),
             QueryEnum::Context(named_query) => search_cost(named_query.query.flat_iter()),
             QueryEnum::FeedbackNaive(named_query) => search_cost(named_query.query.flat_iter()),
+            QueryEnum::NearestWithFuzzy(named_query) => search_cost([&named_query.query.traget]),
         }
     }
 }
@@ -141,6 +152,9 @@ impl From<QueryEnum> for QueryVector {
             QueryEnum::Discover(named) => QueryVector::Discovery(named.query),
             QueryEnum::Context(named) => QueryVector::Context(named.query),
             QueryEnum::FeedbackNaive(named) => QueryVector::FeedbackNaive(named.query),
+            QueryEnum::NearestWithFuzzy(named) => {
+                unimplemented!("Fuzzy search is only supported for sparse vectors for now")
+            }
         }
     }
 }
@@ -193,6 +207,9 @@ impl From<QueryEnum> for grpc::QueryEnum {
             QueryEnum::FeedbackNaive(_named) => {
                 // This conversion only happens for search/recommend/discover dedicated endpoints. Feedback does not have one.
                 unimplemented!("there is no specialized feedback endpoint")
+            }
+            QueryEnum::NearestWithFuzzy(named) => {
+                unimplemented!("Fuzzy search is only supported for sparse vectors for now")
             }
         }
     }
@@ -310,6 +327,9 @@ impl From<QueryEnum> for grpc::RawQuery {
             }
             QueryEnum::FeedbackNaive(named) => {
                 Variant::Feedback(grpc::raw_query::Feedback::from(named.query))
+            }
+            QueryEnum::NearestWithFuzzy(_) => {
+                unimplemented!("Fuzzy search is only supported for sparse vectors for now")
             }
         };
 

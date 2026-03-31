@@ -238,6 +238,7 @@ mod tests {
             text: text.to_string(),
             model: "test-model".to_string(),
             options: Default::default(),
+            fuzzy: None,
         }
     }
 
