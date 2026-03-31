@@ -8,9 +8,8 @@ use bytemuck::TransparentWrapper;
 use derive_more::Into;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use segment::index::query_optimization::rescore_formula::parsed_formula::DistKind;
 use segment::index::query_optimization::rescore_formula::parsed_formula::{
-    DecayKind, ParsedFormula,
+    DecayKind, DistKind, ParsedFormula,
 };
 use shard::query::formula::{ExpressionInternal, FormulaInternal};
 
@@ -105,7 +104,7 @@ pub enum PyDistKind {
     /// levenshtein function
     Levenshtein,
     /// Jaro-Winkler function
-    JaroWinkler
+    JaroWinkler,
 }
 
 #[pymethods]

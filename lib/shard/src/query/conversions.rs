@@ -7,7 +7,7 @@ use segment::data_types::vectors::{
     DEFAULT_VECTOR_NAME, NamedQuery, NamedVectorStruct, VectorInternal,
 };
 use segment::index::query_optimization::rescore_formula::parsed_formula::{
-    DecayKind, ParsedFormula,
+    DecayKind, DistKind, ParsedFormula,
 };
 use segment::types::{Filter, SearchParams, VectorNameBuf, WithPayloadInterface, WithVector};
 use segment::vector_storage::query::{
@@ -734,6 +734,12 @@ impl From<rest::Expression> for ExpressionInternal {
                 midpoint,
                 scale,
             },
+            rest::Expression::StrDist(rest::StrDistExpression {
+                str_dist: rest::StrDistParamsExpression { field, query, func },
+            }) => ExpressionInternal::StrDist { field, query, func: match func {
+                rest::StrDistFunc::Levenshtein => segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::Levenshtein,
+                rest::StrDistFunc::JaroWinkler => segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::JaroWinlker,
+            } },
         }
     }
 }
@@ -840,6 +846,26 @@ impl TryFrom<grpc::Expression> for ExpressionInternal {
             }
             Variant::GaussDecay(decay_params) => {
                 try_from_decay_params(*decay_params, DecayKind::Gauss)?
+            }
+            Variant::Levenshtein(grpc::DistParamsExpression { field, query }) => {
+                let field = field
+                    .parse()
+                    .map_err(|_| tonic::Status::invalid_argument("invalid payload key"))?;
+                ExpressionInternal::StrDist {
+                    field,
+                    query,
+                    func: DistKind::Levenshtein,
+                }
+            }
+            Variant::JaroWinkler(grpc::DistParamsExpression { field, query }) => {
+                let field = field
+                    .parse()
+                    .map_err(|_| tonic::Status::invalid_argument("invalid payload key"))?;
+                ExpressionInternal::StrDist {
+                    field,
+                    query,
+                    func: DistKind::JaroWinlker,
+                }
             }
         };
 

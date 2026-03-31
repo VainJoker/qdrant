@@ -104,7 +104,7 @@ impl MmapFullTextIndex {
     pub fn populate(&self) -> OperationResult<()> {
         self.inverted_index.populate()?;
         if let Some(fuzzy) = &self.fuzzy_index {
-            fuzzy.populate()?;
+            fuzzy.populate();
         }
         Ok(())
     }
