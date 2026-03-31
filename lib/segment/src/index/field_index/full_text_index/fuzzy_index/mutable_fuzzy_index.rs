@@ -47,8 +47,9 @@ impl Default for MutableFuzzyIndex {
 impl FuzzyIndex for MutableFuzzyIndex {
     fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut buckets: Vec<Vec<FuzzyCandidate>> =
-            (0..=params.max_edits as u32).map(|_| Vec::new()).collect();
+        let mut buckets: Vec<Vec<FuzzyCandidate>> = (0..=u32::from(params.max_edits))
+            .map(|_| Vec::new())
+            .collect();
         let mut total = 0usize;
 
         let prefix_len = (params.prefix_length as usize).min(query.len());
@@ -63,12 +64,8 @@ impl FuzzyIndex for MutableFuzzyIndex {
             }
 
             let dist = levenshtein(query, term) as u32;
-            if dist <= params.max_edits as u32 {
-                buckets[dist as usize].push(FuzzyCandidate::new(
-                    term.to_string(),
-                    query.len(),
-                    dist,
-                ));
+            if dist <= u32::from(params.max_edits) {
+                buckets[dist as usize].push(FuzzyCandidate::new(term.clone(), query.len(), dist));
                 total += 1;
                 if total >= max {
                     break 'outer;

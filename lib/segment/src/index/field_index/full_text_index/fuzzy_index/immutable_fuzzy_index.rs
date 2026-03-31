@@ -25,16 +25,16 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
         let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
         let mut seen: HashSet<String> = HashSet::new();
 
-        'outer: for distance in 0..=params.max_edits as u32 {
+        'outer: for distance in 0..=u32::from(params.max_edits) {
             if results.len() >= max {
                 break;
             }
 
-            let automaton =
-                match PrefixLevenshtein::new(query, params.prefix_length as usize, distance) {
-                    Ok(a) => a,
-                    Err(_) => break,
-                };
+            let Ok(automaton) =
+                PrefixLevenshtein::new(query, params.prefix_length as usize, distance)
+            else {
+                break;
+            };
 
             let prefix_bytes =
                 &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];

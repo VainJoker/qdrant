@@ -2035,9 +2035,9 @@ fn grpc_fuzzy_params_to_segment(params: Option<grpc::FuzzyParams>) -> segment::t
 
 fn segment_fuzzy_params_to_grpc(params: &segment::types::FuzzyParams) -> grpc::FuzzyParams {
     grpc::FuzzyParams {
-        max_edits: Some(params.max_edits as u32),
-        prefix_length: Some(params.prefix_length as u32),
-        max_expansions: Some(params.max_expansions as u8 as u32),
+        max_edits: Some(u32::from(params.max_edits)),
+        prefix_length: Some(u32::from(params.prefix_length)),
+        max_expansions: Some(u32::from(params.max_expansions)),
     }
 }
 
