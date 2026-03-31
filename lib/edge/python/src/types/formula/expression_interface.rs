@@ -88,8 +88,8 @@ pub enum PyExpressionInterface {
     StrDist {
         field: PyJsonPath,
         query: String,
-        func: PyDistKind
-    }
+        func: PyDistKind,
+    },
 }
 
 impl Repr for PyExpressionInterface {
@@ -154,11 +154,7 @@ impl Repr for PyExpressionInterface {
             ),
             PyExpressionInterface::StrDist { field, query, func } => (
                 "StrDist",
-                &[
-                    ("field", field),
-                    ("query", query),
-                    ("func", func)
-                ]
+                &[("field", field), ("query", query), ("func", func)],
             ),
         };
 

@@ -93,7 +93,7 @@ pub enum ParsedExpression {
         field: JsonPath,
         query: String,
         func: DistKind,
-    }
+    },
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Serialize, Hash)]
