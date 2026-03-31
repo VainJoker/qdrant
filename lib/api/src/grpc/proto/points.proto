@@ -908,7 +908,17 @@ message Expression {
     DecayParamsExpression gauss_decay = 18;
     // Linear decay
     DecayParamsExpression lin_decay = 19;
+    // Levenshtein distance
+    DistParamsExpression levenshtein = 20;
+    // Jaro-Winkler function
+    DistParamsExpression jaro_winkler = 21;
+
   }
+}
+
+message DistParamsExpression {
+  string field = 1;
+  string query = 2;
 }
 
 message GeoDistance {

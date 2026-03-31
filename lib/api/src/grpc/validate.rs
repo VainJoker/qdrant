@@ -419,6 +419,8 @@ impl Validate for super::qdrant::expression::Variant {
             grpc::expression::Variant::LinDecay(decay_params_expression) => {
                 decay_params_expression.validate()
             }
+            grpc::expression::Variant::Levenshtein(_) => Ok(()),
+            grpc::expression::Variant::JaroWinkler(_) => Ok(()),
         }
     }
 }

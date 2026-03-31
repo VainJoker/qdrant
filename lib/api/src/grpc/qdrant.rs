@@ -6308,7 +6308,7 @@ pub struct Formula {
 pub struct Expression {
     #[prost(
         oneof = "expression::Variant",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21"
     )]
     #[validate(nested)]
     pub variant: ::core::option::Option<expression::Variant>,
@@ -6375,7 +6375,22 @@ pub mod expression {
         /// Linear decay
         #[prost(message, tag = "19")]
         LinDecay(::prost::alloc::boxed::Box<super::DecayParamsExpression>),
+        /// Levenshtein distance
+        #[prost(message, tag = "20")]
+        Levenshtein(super::DistParamsExpression),
+        /// Jaro-Winkler function
+        #[prost(message, tag = "21")]
+        JaroWinkler(super::DistParamsExpression),
     }
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DistParamsExpression {
+    #[prost(string, tag = "1")]
+    pub field: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub query: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

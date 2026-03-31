@@ -9,7 +9,7 @@ use derive_more::Into;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use segment::index::query_optimization::rescore_formula::parsed_formula::{
-    DecayKind, ParsedFormula,
+    DecayKind, DistKind, ParsedFormula,
 };
 use shard::query::formula::{ExpressionInternal, FormulaInternal};
 
@@ -94,6 +94,51 @@ impl From<PyDecayKind> for DecayKind {
             PyDecayKind::Lin => DecayKind::Lin,
             PyDecayKind::Gauss => DecayKind::Gauss,
             PyDecayKind::Exp => DecayKind::Exp,
+        }
+    }
+}
+
+#[pyclass(name = "DistKind", from_py_object)]
+#[derive(Copy, Clone, Debug)]
+pub enum PyDistKind {
+    /// levenshtein function
+    Levenshtein,
+    /// Jaro-Winkler function
+    JaroWinkler,
+}
+
+#[pymethods]
+impl PyDistKind {
+    pub fn __repr__(&self) -> String {
+        self.repr()
+    }
+}
+
+impl Repr for PyDistKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let repr = match self {
+            PyDistKind::Levenshtein => "levenshtein",
+            PyDistKind::JaroWinkler => "jaro-winkler",
+        };
+
+        f.simple_enum::<Self>(repr)
+    }
+}
+
+impl From<DistKind> for PyDistKind {
+    fn from(value: DistKind) -> Self {
+        match value {
+            DistKind::Levenshtein => PyDistKind::Levenshtein,
+            DistKind::JaroWinlker => PyDistKind::JaroWinkler,
+        }
+    }
+}
+
+impl From<PyDistKind> for DistKind {
+    fn from(value: PyDistKind) -> Self {
+        match value {
+            PyDistKind::Levenshtein => DistKind::Levenshtein,
+            PyDistKind::JaroWinkler => DistKind::JaroWinlker,
         }
     }
 }
