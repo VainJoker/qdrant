@@ -928,7 +928,7 @@ pub enum Expression {
     LinDecay(LinDecayExpression),
     ExpDecay(ExpDecayExpression),
     GaussDecay(GaussDecayExpression),
-    StrDist(StrDistExpression)
+    StrDist(StrDistExpression),
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1064,7 +1064,7 @@ pub struct DecayParamsExpression {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Validate)]
 pub struct StrDistExpression {
-    pub str_dist: StrDistParamsExpression
+    pub str_dist: StrDistParamsExpression,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -1078,7 +1078,7 @@ pub enum StrDistFunc {
 pub struct StrDistParamsExpression {
     pub field: JsonPath,
     pub query: String,
-    pub func: StrDistFunc
+    pub func: StrDistFunc,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]

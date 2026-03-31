@@ -306,11 +306,7 @@ impl FormulaScorer<'_> {
 
                 Ok(decay)
             }
-            ParsedExpression::StrDist {
-                field,
-                query,
-                func
-            } => {
+            ParsedExpression::StrDist { field, query, func } => {
                 let value = self.get_parsed_payload_value(
                     field,
                     point_id,
@@ -318,10 +314,12 @@ impl FormulaScorer<'_> {
                 )?;
 
                 match func {
-                    super::parsed_formula::DistKind::Levenshtein => Ok(normalized_levenshtein(&value, query)),
+                    super::parsed_formula::DistKind::Levenshtein => {
+                        Ok(normalized_levenshtein(&value, query))
+                    }
                     super::parsed_formula::DistKind::JaroWinlker => Ok(jaro_winkler(&value, query)),
                 }
-            },
+            }
         }
     }
 

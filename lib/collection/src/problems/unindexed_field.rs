@@ -520,11 +520,11 @@ impl<'a> Extractor<'a> {
             ExpressionInternal::StrDist {
                 field,
                 query: _,
-                func: _
+                func: _,
             } => {
                 key = field.clone();
                 required_index = vec![FieldIndexType::Text];
-            },
+            }
         }
 
         if self.needs_index(&key, &required_index) {
