@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
-use tempfile::{Builder, TempDir};
+use tempfile::Builder;
 
 use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
 use crate::index::field_index::full_text_index::inverted_index::ParsedQuery;

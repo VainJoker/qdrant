@@ -25,8 +25,12 @@ impl MutableFuzzyIndex {
         index
     }
 
-    pub fn add_terms(&mut self, terms: Vec<String>) {
-        self.terms.extend(terms);
+    /// Insert a term only if it doesn't already exist, avoiding String
+    /// allocation for already-seen tokens.
+    pub fn insert_if_new(&mut self, term: &str) {
+        if !self.terms.contains(term) {
+            self.terms.insert(term.to_string());
+        }
     }
 
     fn insert(&mut self, term: String) {

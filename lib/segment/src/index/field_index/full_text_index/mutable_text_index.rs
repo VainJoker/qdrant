@@ -241,9 +241,12 @@ impl MutableFullTextIndex {
             });
         }
 
-        // Update fuzzy index with new token strings before registering
+        // Update fuzzy index with new token strings before registering.
+        // Use insert_if_new to avoid String allocation for already-seen tokens.
         if let Some(fuzzy_index) = &mut self.fuzzy_index {
-            fuzzy_index.add_terms(str_tokens.iter().map(|t| t.to_string()).collect());
+            for token in &str_tokens {
+                fuzzy_index.insert_if_new(token.as_ref());
+            }
         }
 
         let tokens = self.inverted_index.register_tokens(&str_tokens);

@@ -15,6 +15,7 @@ use super::positions::Positions;
 use super::postings_iterator::{
     check_compressed_postings_fuzzy_phrase, intersect_compressed_postings_fuzzy_phrase_iterator,
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
+    merge_fuzzy_all_tokens_iterator,
 };
 use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::{OperationError, OperationResult};
@@ -221,6 +222,89 @@ impl ImmutableInvertedIndex {
             ImmutablePostings::Ids(_postings) => false,
         }
     }
+
+    /// Iterate over point ids whose documents match all fuzzy token groups
+    fn filter_fuzzy_all_tokens<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+
+        let is_active = |idx: PointOffsetType| {
+            self.point_to_tokens_count
+                .get(idx as usize)
+                .is_some_and(|x| *x > 0)
+        };
+
+        match &self.postings {
+            ImmutablePostings::Ids(postings) => merge_fuzzy_all_tokens_iterator(
+                fuzzy_doc,
+                |tid| postings.get(tid as usize).map(PostingList::view),
+                is_active,
+            ),
+            ImmutablePostings::WithPositions(postings) => merge_fuzzy_all_tokens_iterator(
+                fuzzy_doc,
+                |tid| postings.get(tid as usize).map(PostingList::view),
+                is_active,
+            ),
+        }
+    }
+
+    /// Iterate over point ids whose documents match a fuzzy phrase
+    fn filter_fuzzy_phrase<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+
+        match &self.postings {
+            ImmutablePostings::Ids(_) => Box::new(std::iter::empty()),
+            ImmutablePostings::WithPositions(postings) => {
+                let is_active = |idx: PointOffsetType| {
+                    self.point_to_tokens_count
+                        .get(idx as usize)
+                        .is_some_and(|x| *x > 0)
+                };
+                Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
+                    fuzzy_doc,
+                    |tid| postings.get(*tid as usize).map(PostingList::view),
+                    is_active,
+                ))
+            }
+        }
+    }
+
+    fn check_fuzzy_all_tokens(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
+            return false;
+        }
+        fuzzy_doc
+            .iter()
+            .all(|group| self.check_has_any(group, point_id))
+    }
+
+    fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if self
+            .point_to_tokens_count
+            .get(point_id as usize)
+            .is_none_or(|x| *x == 0)
+        {
+            return false;
+        }
+
+        match &self.postings {
+            ImmutablePostings::Ids(_) => false,
+            ImmutablePostings::WithPositions(postings) => {
+                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
+                    postings.get(*tid as usize).map(PostingList::view)
+                })
+            }
+        }
+    }
 }
 
 impl InvertedIndex for ImmutableInvertedIndex {
@@ -266,85 +350,12 @@ impl InvertedIndex for ImmutableInvertedIndex {
     ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
         match query {
             ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens)),
-            ParsedQuery::Phrase(tokens) => Box::new(self.filter_has_phrase(tokens)),
-            ParsedQuery::AnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
-            ParsedQuery::FuzzyAnyTokens(tokens) => Box::new(self.filter_has_any(tokens)),
-            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
-                if fuzzy_doc.is_empty() {
-                    return Box::new(std::iter::empty());
-                }
-
-                let is_active = |idx: PointOffsetType| {
-                    self.point_to_tokens_count
-                        .get(idx as usize)
-                        .is_some_and(|x| *x > 0)
-                };
-
-                // Union all expanded tokens across every group for initial candidate set.
-                let all_tokens: TokenSet = fuzzy_doc
-                    .iter()
-                    .flat_map(|group| group.tokens().iter().copied())
-                    .collect();
-
-                // Local generic helper avoids duplicating the match arms for Ids / WithPositions.
-                fn filter_all_fuzzy<'a, V: PostingValue>(
-                    postings: &'a [PostingList<V>],
-                    all_tokens: TokenSet,
-                    fuzzy_doc: FuzzyDocument,
-                    is_active: impl Fn(PointOffsetType) -> bool + 'a,
-                ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
-                    let views: Vec<_> = all_tokens
-                        .tokens()
-                        .iter()
-                        .filter_map(|&tid| postings.get(tid as usize).map(PostingList::view))
-                        .collect();
-                    if views.is_empty() {
-                        return Box::new(std::iter::empty());
-                    }
-                    Box::new(merge_compressed_postings_iterator(views, is_active).filter(
-                        move |&point_id| {
-                            // AND: every group must have at least one matching token.
-                            fuzzy_doc.iter().all(|group| {
-                                group.tokens().iter().any(|&tid| {
-                                    postings
-                                        .get(tid as usize)
-                                        .is_some_and(|pl| pl.visitor().contains(point_id))
-                                })
-                            })
-                        },
-                    ))
-                }
-
-                match &self.postings {
-                    ImmutablePostings::Ids(postings) => {
-                        filter_all_fuzzy(postings, all_tokens, fuzzy_doc, is_active)
-                    }
-                    ImmutablePostings::WithPositions(postings) => {
-                        filter_all_fuzzy(postings, all_tokens, fuzzy_doc, is_active)
-                    }
-                }
+            ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase)),
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                Box::new(self.filter_has_any(tokens))
             }
-            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
-                if fuzzy_doc.is_empty() {
-                    return Box::new(std::iter::empty());
-                }
-                match &self.postings {
-                    // Positional information required for phrase matching.
-                    ImmutablePostings::Ids(_) => Box::new(std::iter::empty()),
-                    ImmutablePostings::WithPositions(postings) => {
-                        let is_active = |idx: PointOffsetType| {
-                            self.point_to_tokens_count
-                                .get(idx as usize)
-                                .is_some_and(|x| *x > 0)
-                        };
-                        Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
-                            fuzzy_doc,
-                            |tid| postings.get(*tid as usize).map(PostingList::view),
-                            is_active,
-                        ))
-                    }
-                }
-            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.filter_fuzzy_all_tokens(fuzzy_doc),
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.filter_fuzzy_phrase(fuzzy_doc),
         }
     }
 
@@ -364,36 +375,13 @@ impl InvertedIndex for ImmutableInvertedIndex {
         match parsed_query {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
-            ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
-            // OR: any expanded token matching the document is sufficient.
-            ParsedQuery::FuzzyAnyTokens(tokens) => self.check_has_any(tokens, point_id),
-            // AND: every fuzzy group must have at least one matching token.
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.check_has_any(tokens, point_id)
+            }
             ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
-                if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
-                    return false;
-                }
-                fuzzy_doc
-                    .iter()
-                    .all(|group| self.check_has_any(group, point_id))
+                self.check_fuzzy_all_tokens(fuzzy_doc, point_id)
             }
-            // Phrase: document must contain a contiguous window matching the fuzzy phrase.
-            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
-                if self
-                    .point_to_tokens_count
-                    .get(point_id as usize)
-                    .is_none_or(|x| *x == 0)
-                {
-                    return false;
-                }
-                match &self.postings {
-                    ImmutablePostings::Ids(_) => false,
-                    ImmutablePostings::WithPositions(postings) => {
-                        check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
-                            postings.get(*tid as usize).map(PostingList::view)
-                        })
-                    }
-                }
-            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.check_fuzzy_phrase(fuzzy_doc, point_id),
         }
     }
 

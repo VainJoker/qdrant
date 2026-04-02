@@ -160,6 +160,14 @@ impl FuzzyDocument {
         self.0.iter()
     }
 
+    /// Collect all token IDs across every group into a single `TokenSet`.
+    pub fn all_tokens(&self) -> TokenSet {
+        self.0
+            .iter()
+            .flat_map(|group| group.tokens().iter().copied())
+            .collect()
+    }
+
     /// Checks if a contiguous window of this document's groups matches the exact [`Document`].
     pub fn matches_document(&self, doc: &Document) -> bool {
         let tokens = doc.tokens();
@@ -293,10 +301,7 @@ pub trait InvertedIndex {
             }
             ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
                 // Union all expanded token IDs for a subset-style estimate.
-                let all_tokens: TokenSet = fuzzy_doc
-                    .iter()
-                    .flat_map(|group| group.tokens().iter().copied())
-                    .collect();
+                let all_tokens = fuzzy_doc.all_tokens();
                 self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter)
             }
             ParsedQuery::FuzzyAnyTokens(tokens) => {
@@ -309,10 +314,7 @@ pub trait InvertedIndex {
                         PrimaryCondition::Condition(Box::new(condition.clone())),
                     );
                 }
-                let all_tokens: TokenSet = fuzzy_doc
-                    .iter()
-                    .flat_map(|group| group.tokens().iter().copied())
-                    .collect();
+                let all_tokens = fuzzy_doc.all_tokens();
                 let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);
                 let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
                 CardinalityEstimation {

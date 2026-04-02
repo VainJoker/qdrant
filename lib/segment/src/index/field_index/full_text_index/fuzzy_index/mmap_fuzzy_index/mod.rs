@@ -2,12 +2,12 @@ mod mmap_fst;
 // mod mmap_fuzzy_index;
 
 // pub use mmap_fuzzy_index::MmapFuzzyIndex;
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use common::fs::clear_disk_cache;
 use fst::{IntoStreamer, Streamer};
 pub use mmap_fst::MmapFst;
+use strsim::levenshtein;
 
 use super::FuzzyIndex;
 use crate::common::operation_error::OperationResult;
@@ -79,43 +79,38 @@ impl MmapFuzzyIndex {
 impl FuzzyIndex for MmapFuzzyIndex {
     fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
-        let mut seen: HashSet<String> = HashSet::new();
+        let max_edits = u32::from(params.max_edits);
 
-        'outer: for distance in 0..=u32::from(params.max_edits) {
+        // Build one automaton at max_edits and traverse the FST exactly once.
+        // Each term in the FST is unique, so no deduplication is needed.
+        // Actual edit distance is computed per-term so that weight is accurate.
+        let Ok(automaton) = PrefixLevenshtein::new(query, params.prefix_length as usize, max_edits)
+        else {
+            return Vec::new();
+        };
+
+        let prefix_bytes =
+            &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];
+        let mut stream = if prefix_bytes.is_empty() {
+            self.index.get_fst().search(&automaton).into_stream()
+        } else {
+            self.index
+                .get_fst()
+                .search(&automaton)
+                .ge(prefix_bytes)
+                .into_stream()
+        };
+
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
+        while let Some((term_bytes, _)) = stream.next() {
+            let term = match std::str::from_utf8(term_bytes) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let dist = levenshtein(query, term) as u32;
+            results.push(FuzzyCandidate::new(term.to_string(), query.len(), dist));
             if results.len() >= max {
                 break;
-            }
-
-            let Ok(automaton) =
-                PrefixLevenshtein::new(query, params.prefix_length as usize, distance)
-            else {
-                break;
-            };
-
-            let prefix_bytes =
-                &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];
-            let mut stream = if prefix_bytes.is_empty() {
-                self.index.get_fst().search(&automaton).into_stream()
-            } else {
-                self.index
-                    .get_fst()
-                    .search(&automaton)
-                    .ge(prefix_bytes)
-                    .into_stream()
-            };
-
-            while let Some((term_bytes, _)) = stream.next() {
-                let term = match std::str::from_utf8(term_bytes) {
-                    Ok(t) => t.to_string(),
-                    Err(_) => continue,
-                };
-                if seen.insert(term.clone()) {
-                    results.push(FuzzyCandidate::new(term, query.len(), distance));
-                    if results.len() >= max {
-                        break 'outer;
-                    }
-                }
             }
         }
 

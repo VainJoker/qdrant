@@ -1,6 +1,5 @@
-use std::collections::HashSet;
-
 use fst::{IntoStreamer, Set, Streamer};
+use strsim::levenshtein;
 
 use super::FuzzyIndex;
 use crate::index::field_index::full_text_index::fuzzy_index::automaton::PrefixLevenshtein;
@@ -22,43 +21,56 @@ impl ImmutableFuzzyIndex {
 impl FuzzyIndex for ImmutableFuzzyIndex {
     fn search(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
-        let mut seen: HashSet<String> = HashSet::new();
+        let max_edits = u32::from(params.max_edits);
 
-        'outer: for distance in 0..=u32::from(params.max_edits) {
+        // Build one automaton at max_edits and traverse the FST exactly once.
+        // Each term in the FST is unique, so no deduplication is needed.
+        // Actual edit distance is computed per-term so that weight is accurate.
+        let Ok(automaton) = PrefixLevenshtein::new(query, params.prefix_length as usize, max_edits)
+        else {
+            return Vec::new();
+        };
+
+        let prefix_bytes =
+            &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];
+        let mut stream = if prefix_bytes.is_empty() {
+            self.index.search(&automaton).into_stream()
+        } else {
+            self.index.search(&automaton).ge(prefix_bytes).into_stream()
+        };
+
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
+        while let Some(term_bytes) = stream.next() {
+            let term = match std::str::from_utf8(term_bytes) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let dist = levenshtein(query, term) as u32;
+            results.push(FuzzyCandidate::new(term.to_string(), query.len(), dist));
             if results.len() >= max {
                 break;
-            }
-
-            let Ok(automaton) =
-                PrefixLevenshtein::new(query, params.prefix_length as usize, distance)
-            else {
-                break;
-            };
-
-            let prefix_bytes =
-                &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];
-            let mut stream = if prefix_bytes.is_empty() {
-                self.index.search(&automaton).into_stream()
-            } else {
-                self.index.search(&automaton).ge(prefix_bytes).into_stream()
-            };
-
-            while let Some(term_bytes) = stream.next() {
-                let term = match std::str::from_utf8(term_bytes) {
-                    Ok(t) => t.to_string(),
-                    Err(_) => continue,
-                };
-                if seen.insert(term.clone()) {
-                    results.push(FuzzyCandidate::new(term, query.len(), distance));
-                    if results.len() >= max {
-                        break 'outer;
-                    }
-                }
             }
         }
 
         results
+    }
+}
+
+impl ImmutableFuzzyIndex {
+    /// Build an ImmutableFuzzyIndex directly from a sorted iterator of terms.
+    ///
+    /// This avoids the need for a MutableFuzzyIndex (BTreeSet) intermediate,
+    /// which is critical for large datasets where maintaining a duplicate
+    /// vocabulary copy causes OOM.
+    pub fn build_from_sorted_terms<'a>(
+        sorted_terms: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, crate::common::operation_error::OperationError> {
+        let index = Set::from_iter(sorted_terms).map_err(|e| {
+            crate::common::operation_error::OperationError::service_error(format!(
+                "Failed to build fuzzy index from sorted terms: {e}"
+            ))
+        })?;
+        Ok(Self { index })
     }
 }
 

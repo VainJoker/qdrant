@@ -349,6 +349,10 @@ impl FullTextIndex {
         match &match_fuzzy.fuzzy {
             Fuzzy::Text { text, params } => {
                 let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                // max_edits=0 is equivalent to exact match; skip FST traversal entirely.
+                if params.max_edits == 0 {
+                    return self.parse_text_query(text, hw_counter);
+                }
                 let mut token_sets: Vec<TokenSet> = Vec::new();
                 let mut has_query_tokens = false;
                 let mut has_token_without_candidates = false;
@@ -371,6 +375,10 @@ impl FullTextIndex {
             }
             Fuzzy::TextAny { text_any, params } => {
                 let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                // max_edits=0 is equivalent to exact match; skip FST traversal entirely.
+                if params.max_edits == 0 {
+                    return self.parse_text_any_query(text_any, hw_counter);
+                }
                 let mut all_token_ids = AHashSet::new();
 
                 self.get_tokenizer().tokenize_query(text_any, |token| {
@@ -385,6 +393,10 @@ impl FullTextIndex {
             }
             Fuzzy::Phrase { phrase, params } => {
                 let params = params.as_ref().unwrap_or(&default_fuzzy_params);
+                // max_edits=0 is equivalent to exact match; skip FST traversal entirely.
+                if params.max_edits == 0 {
+                    return self.parse_phrase_query(phrase, hw_counter);
+                }
                 let mut token_sets: Vec<TokenSet> = Vec::new();
                 let mut has_query_tokens = false;
                 let mut has_token_without_candidates = false;

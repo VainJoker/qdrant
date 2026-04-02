@@ -294,6 +294,42 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
     )
 }
 
+/// Returns an iterator that yields every active point in which **every group** of the
+/// fuzzy document has at least one matching token.
+///
+/// Candidates are generated from the union of all tokens across all groups (broad pass),
+/// then filtered by the per-group AND condition (narrow pass).
+///
+/// `get_posting(token_id)` must return `None` for tokens not present in the index.
+pub fn merge_fuzzy_all_tokens_iterator<'a, V: PostingValue + 'a>(
+    fuzzy_doc: FuzzyDocument,
+    get_posting: impl Fn(TokenId) -> Option<PostingListView<'a, V>> + 'a,
+    is_active: impl Fn(PointOffsetType) -> bool + 'a,
+) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    let all_tokens = fuzzy_doc.all_tokens();
+    if all_tokens.is_empty() {
+        return Box::new(std::iter::empty());
+    }
+    let views: Vec<_> = all_tokens
+        .tokens()
+        .iter()
+        .filter_map(|&tid| get_posting(tid))
+        .collect();
+    if views.is_empty() {
+        return Box::new(std::iter::empty());
+    }
+    Box::new(
+        merge_compressed_postings_iterator(views, is_active).filter(move |&point_id| {
+            fuzzy_doc.iter().all(|group| {
+                group
+                    .tokens()
+                    .iter()
+                    .any(|&tid| get_posting(tid).is_some_and(|pl| pl.visitor().contains(point_id)))
+            })
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
 
