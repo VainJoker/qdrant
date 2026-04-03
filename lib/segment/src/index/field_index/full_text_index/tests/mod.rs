@@ -336,6 +336,7 @@ fn test_fuzzy_search_suite() {
         (14, "slyly crimson falcon"),
         (15, "unrelated document here"),
         (16, "quickly"),
+        (17, "Bellamy v. Cracker Barrel"),
     ];
 
     let hw_counter = HardwareCounterCell::default();
@@ -488,12 +489,12 @@ fn test_fuzzy_search_suite() {
         ),
         (
             "phrase_fuzzy_bridging_non_adjacent_tokens",
-            // "sat" is 1-edit from "mat", so "cat sat" is an adjacent window in doc13
+            // Short tokens are not fuzzily expanded, so this stays an exact phrase query.
             Fuzzy::Phrase {
                 phrase: "cat mat".into(),
                 params: fp!(1, 0, 50),
             },
-            Some(&[13]),
+            Some(&[]),
         ),
         (
             "phrase_fuzzy_bridging_non_adjacent_tokens_with_prefix_guard",
@@ -529,6 +530,30 @@ fn test_fuzzy_search_suite() {
                 params: fp!(1, 0, 50),
             },
             Some(&[0, 1, 7, 16]),
+        ),
+        (
+            "text_any_single_char_token_from_punctuation_matches",
+            Fuzzy::TextAny {
+                text_any: "v.".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17]),
+        ),
+        (
+            "text_single_char_token_with_punctuation_matches",
+            Fuzzy::Text {
+                text: "bellamy v. cracker barrel".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17]),
+        ),
+        (
+            "phrase_single_char_token_with_punctuation_matches",
+            Fuzzy::Phrase {
+                phrase: "bellamy v. cracker barrel".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17]),
         ),
         // ── Token-boundary / substring guard ─────────────────────────────────
         (

@@ -308,21 +308,7 @@ pub trait InvertedIndex {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
             }
             ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
-                // Approximate: treat like a phrase of the same length.
-                if fuzzy_doc.is_empty() {
-                    return CardinalityEstimation::exact(0).with_primary_clause(
-                        PrimaryCondition::Condition(Box::new(condition.clone())),
-                    );
-                }
-                let all_tokens = fuzzy_doc.all_tokens();
-                let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);
-                let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
-                CardinalityEstimation {
-                    primary_clauses: any_est.primary_clauses,
-                    min: any_est.min / phrase_sq,
-                    exp: any_est.exp / phrase_sq,
-                    max: any_est.max / phrase_sq,
-                }
+                self.estimate_has_fuzzy_phrase_cardinality(fuzzy_doc, condition, hw_counter)
             }
         }
     }
@@ -436,6 +422,27 @@ pub trait InvertedIndex {
             min: subset_estimation.min / phrase_sq,
             exp: subset_estimation.exp / phrase_sq,
             max: subset_estimation.max / phrase_sq,
+        }
+    }
+
+    fn estimate_has_fuzzy_phrase_cardinality(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        condition: &FieldCondition,
+        hw_counter: &HardwareCounterCell,
+    ) -> CardinalityEstimation {
+        if fuzzy_doc.is_empty() {
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
+        }
+        let all_tokens = fuzzy_doc.all_tokens();
+        let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);
+        let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
+        CardinalityEstimation {
+            primary_clauses: any_est.primary_clauses,
+            min: any_est.min / phrase_sq,
+            exp: any_est.exp / phrase_sq,
+            max: any_est.max / phrase_sq,
         }
     }
 

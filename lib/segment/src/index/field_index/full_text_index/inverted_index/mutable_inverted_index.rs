@@ -309,18 +309,24 @@ impl InvertedIndex for MutableInvertedIndex {
                 let Some(doc) = self.get_tokens(point_id) else {
                     return false;
                 };
+
+                // Check that all tokens are in document
                 doc.has_subset(query)
             }
             ParsedQuery::Phrase(document) => {
                 let Some(doc) = self.get_document(point_id) else {
                     return false;
                 };
+
+                // Check that all tokens are in document, in order
                 doc.has_phrase(document)
             }
             ParsedQuery::AnyTokens(query) | ParsedQuery::FuzzyAnyTokens(query) => {
                 let Some(doc) = self.get_tokens(point_id) else {
                     return false;
                 };
+
+                // Check that any token is in document
                 doc.has_any(query)
             }
             ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
