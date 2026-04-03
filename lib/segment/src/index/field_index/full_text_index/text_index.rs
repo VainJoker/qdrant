@@ -34,7 +34,8 @@ use crate::index::field_index::{
 use crate::index::payload_config::{IndexMutability, StorageType};
 use crate::telemetry::PayloadIndexTelemetry;
 use crate::types::{
-    FieldCondition, Fuzzy, FuzzyParams, Match, MatchFuzzy, MatchPhrase, MatchText, MatchTextAny, PayloadKeyType
+    FieldCondition, Fuzzy, FuzzyParams, Match, MatchFuzzy, MatchPhrase, MatchText, MatchTextAny,
+    PayloadKeyType,
 };
 
 pub enum FullTextIndex {
@@ -334,17 +335,17 @@ impl FullTextIndex {
                 if params.as_ref().map_or(0, |p| p.max_edits) == 0 {
                     return self.parse_text_query(text, hw_counter);
                 }
-            },
+            }
             Fuzzy::TextAny { text_any, params } => {
                 if params.as_ref().map_or(0, |p| p.max_edits) == 0 {
                     return self.parse_text_any_query(text_any, hw_counter);
                 }
-            },
+            }
             Fuzzy::Phrase { phrase, params } => {
                 if params.as_ref().map_or(0, |p| p.max_edits) == 0 {
                     return self.parse_phrase_query(phrase, hw_counter);
                 }
-            },
+            }
         };
 
         let default_fuzzy_params = FuzzyParams::default();
@@ -355,8 +356,12 @@ impl FullTextIndex {
             Self::Mmap(index) => index.get_fuzzy_index()?,
         };
 
-        // Expand a single query token: run fuzzy search, then resolve term → TokenId.
+        // Short tokens are matched exactly to avoid overly broad fuzzy expansions.
         let expand_token = |token: &str, params: &FuzzyParams| -> AHashSet<TokenId> {
+            if token.chars().count() <= 3 {
+                return self.get_token(token, hw_counter).into_iter().collect();
+            }
+
             let candidates = fuzzy_index.search(token, params);
             candidates
                 .into_iter()
@@ -420,7 +425,7 @@ impl FullTextIndex {
                 if !has_query_tokens || has_token_without_candidates {
                     return None;
                 }
-
+                log::debug!("Fuzzy phrase query expanded into {:#?}", token_sets);
                 Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(token_sets)))
             }
         }
@@ -489,25 +494,25 @@ impl FullTextIndex {
         FullTextIndex::get_values(payload_value)
             .iter()
             .any(|value| match &query {
-                ParsedQuery::AllTokens(q) => {
+                ParsedQuery::AllTokens(query) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
-                    tokenset.has_subset(q)
+                    tokenset.has_subset(query)
                 }
-                ParsedQuery::Phrase(q) => {
+                ParsedQuery::Phrase(query) => {
                     let document = self.parse_document(value, hw_counter);
-                    document.map(|doc| doc.has_phrase(q)).unwrap_or(false)
+                    document.map(|doc| doc.has_phrase(query)).unwrap_or(false)
                 }
-                ParsedQuery::AnyTokens(q) => {
+                ParsedQuery::AnyTokens(query) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
-                    tokenset.has_any(q)
+                    tokenset.has_any(query)
                 }
                 ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
                     fuzzy_doc.iter().all(|ts| tokenset.has_any(ts))
                 }
-                ParsedQuery::FuzzyAnyTokens(q) => {
+                ParsedQuery::FuzzyAnyTokens(query) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
-                    tokenset.has_any(q)
+                    tokenset.has_any(query)
                 }
                 ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
                     let document = self.parse_document(value, hw_counter);
@@ -767,7 +772,9 @@ impl PayloadFieldIndex for FullTextIndex {
             Some(Match::Phrase(MatchPhrase { phrase })) => {
                 self.parse_phrase_query(phrase, hw_counter)
             }
-            Some(Match::TextAny(MatchTextAny { text_any })) => self.parse_text_any_query(text_any, hw_counter),
+            Some(Match::TextAny(MatchTextAny { text_any })) => {
+                self.parse_text_any_query(text_any, hw_counter)
+            }
             Some(Match::Fuzzy(fuzzy)) => self.parse_fuzzy_query(fuzzy, hw_counter),
             _ => return Ok(None),
         };

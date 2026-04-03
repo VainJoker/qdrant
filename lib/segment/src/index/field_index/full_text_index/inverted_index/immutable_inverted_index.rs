@@ -350,7 +350,7 @@ impl InvertedIndex for ImmutableInvertedIndex {
     ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
         match query {
             ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens)),
-            ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase)),
+            ParsedQuery::Phrase(tokens) => Box::new(self.filter_has_phrase(tokens)),
             ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
                 Box::new(self.filter_has_any(tokens))
             }
