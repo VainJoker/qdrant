@@ -120,7 +120,13 @@ impl MutableInvertedIndex {
         Box::new(iter)
     }
 
-    /// Iterate over point ids whose documents match all fuzzy token groups
+    /// Iterate over point ids whose documents match all fuzzy token groups.
+    ///
+    /// Strategy: drive candidates from the group whose posting-list union is
+    /// smallest, then verify the remaining groups per candidate.  This avoids
+    /// merging k×n posting lists (all_tokens) and instead merges only n lists
+    /// (the smallest group), dramatically reducing the candidate set for
+    /// multi-token queries.
     fn filter_fuzzy_all_tokens(
         &self,
         fuzzy_doc: FuzzyDocument,
@@ -128,8 +134,34 @@ impl MutableInvertedIndex {
         if fuzzy_doc.is_empty() {
             return Box::new(std::iter::empty());
         }
-        let all_tokens = fuzzy_doc.all_tokens();
-        let iter = self.filter_has_any(all_tokens).filter(move |&point_id| {
+
+        // Find the group whose token-posting union is smallest; bail out if
+        // any group has no postings at all (→ guaranteed zero results).
+        let mut smallest_idx = 0;
+        let mut smallest_size = usize::MAX;
+        for (i, group) in fuzzy_doc.iter().enumerate() {
+            let total: usize = group
+                .tokens()
+                .iter()
+                .filter_map(|&tid| self.postings.get(tid as usize))
+                .map(PostingList::len)
+                .sum();
+            if total == 0 {
+                return Box::new(std::iter::empty());
+            }
+            if total < smallest_size {
+                smallest_size = total;
+                smallest_idx = i;
+            }
+        }
+
+        let candidate_postings: Vec<&PostingList> = fuzzy_doc.groups()[smallest_idx]
+            .tokens()
+            .iter()
+            .filter_map(|&tid| self.postings.get(tid as usize))
+            .collect();
+
+        let iter = merge_postings_iterator(candidate_postings).filter(move |&point_id| {
             let Some(doc) = self.get_tokens(point_id) else {
                 return false;
             };
@@ -138,7 +170,9 @@ impl MutableInvertedIndex {
         Box::new(iter)
     }
 
-    /// Iterate over point ids whose documents match a fuzzy phrase
+    /// Iterate over point ids whose documents match a fuzzy phrase.
+    ///
+    /// Same smallest-group-driver strategy as [`Self::filter_fuzzy_all_tokens`].
     fn filter_fuzzy_phrase(
         &self,
         fuzzy_doc: FuzzyDocument,
@@ -149,8 +183,32 @@ impl MutableInvertedIndex {
         let Some(point_to_doc) = self.point_to_doc.as_ref() else {
             return Box::new(std::iter::empty());
         };
-        let all_tokens = fuzzy_doc.all_tokens();
-        let iter = self.filter_has_any(all_tokens).filter(move |&point_id| {
+
+        let mut smallest_idx = 0;
+        let mut smallest_size = usize::MAX;
+        for (i, group) in fuzzy_doc.iter().enumerate() {
+            let total: usize = group
+                .tokens()
+                .iter()
+                .filter_map(|&tid| self.postings.get(tid as usize))
+                .map(PostingList::len)
+                .sum();
+            if total == 0 {
+                return Box::new(std::iter::empty());
+            }
+            if total < smallest_size {
+                smallest_size = total;
+                smallest_idx = i;
+            }
+        }
+
+        let candidate_postings: Vec<&PostingList> = fuzzy_doc.groups()[smallest_idx]
+            .tokens()
+            .iter()
+            .filter_map(|&tid| self.postings.get(tid as usize))
+            .collect();
+
+        let iter = merge_postings_iterator(candidate_postings).filter(move |&point_id| {
             point_to_doc
                 .get(point_id as usize)
                 .and_then(|d| d.as_ref())

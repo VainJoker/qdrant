@@ -432,9 +432,8 @@ pub trait InvertedIndex {
         hw_counter: &HardwareCounterCell,
     ) -> CardinalityEstimation {
         if fuzzy_doc.is_empty() {
-            return CardinalityEstimation::exact(0).with_primary_clause(
-                PrimaryCondition::Condition(Box::new(condition.clone())),
-            );
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
         }
         let all_tokens = fuzzy_doc.all_tokens();
         let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);

@@ -179,6 +179,25 @@ impl<'a, V: PostingValue> PostingVisitor<'a, V> {
             }
         })
     }
+
+    /// Returns only the id at the given offset, without reading the value.
+    ///
+    /// Cheaper than [`Self::get_by_offset`] when the value (e.g. positions) is not needed.
+    pub(crate) fn get_id_by_offset(&mut self, offset: usize) -> Option<PointOffsetType> {
+        if offset >= self.list.len() {
+            return None;
+        }
+        let chunk_idx = offset / CHUNK_LEN;
+        let local_offset = offset % CHUNK_LEN;
+
+        if chunk_idx < self.list.chunks_len() {
+            // Reuses the chunk already decompressed by search_greater_or_equal.
+            Some(self.decompressed_chunk(chunk_idx)[local_offset])
+        } else {
+            // Remainders: local_offset == remainder index (remainders < CHUNK_LEN elements)
+            self.list.get_remainder(local_offset).map(|e| e.id.get())
+        }
+    }
 }
 
 impl<'a, V: PostingValue> IntoIterator for PostingVisitor<'a, V> {

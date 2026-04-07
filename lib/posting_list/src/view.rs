@@ -5,7 +5,7 @@ use bitpacking::BitPacker;
 use common::types::PointOffsetType;
 use zerocopy::little_endian::U32;
 
-use crate::iterator::PostingIterator;
+use crate::iterator::{PostingIdIterator, PostingIterator};
 use crate::posting_list::RemainderPosting;
 use crate::value_handler::PostingValue;
 use crate::visitor::PostingVisitor;
@@ -42,6 +42,11 @@ impl<'a, V: PostingValue> IntoIterator for PostingListView<'a, V> {
 impl<'a, V: PostingValue> PostingListView<'a, V> {
     pub fn visitor(self) -> PostingVisitor<'a, V> {
         PostingVisitor::new(self)
+    }
+
+    /// Creates an ID-only iterator that seeks without reading value (e.g. position) data.
+    pub fn id_iter(self) -> PostingIdIterator<'a, V> {
+        PostingIdIterator::new(self.visitor())
     }
 
     // not implemented as ToOwned trait because it requires PostingList's Borrow to return

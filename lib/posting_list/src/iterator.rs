@@ -90,3 +90,61 @@ impl<V: PostingValue> ExactSizeIterator for PostingIterator<'_, V> {
 }
 
 impl<V: PostingValue> FusedIterator for PostingIterator<'_, V> {}
+
+/// An ID-only seek iterator over a [`PostingListView`].
+///
+/// Like [`PostingIterator`] but never reads the value (e.g. positions), only the point IDs.
+/// Use this when you need membership / seek checks without caring about the stored value, since
+/// skipping value deserialization—especially variable-length position data—can significantly
+/// reduce memory bandwidth.
+///
+/// Has the same **peek semantics** as [`PostingIterator::advance_until_greater_or_equal`]:
+/// the cursor is positioned at the first id ≥ target and stays there until a strictly larger
+/// target is given.
+pub struct PostingIdIterator<'a, V: PostingValue> {
+    visitor: PostingVisitor<'a, V>,
+    /// Cached id at the current cursor position (peek semantics).
+    current_id: Option<PointOffsetType>,
+    offset: usize,
+}
+
+impl<'a, V: PostingValue> PostingIdIterator<'a, V> {
+    pub fn new(visitor: PostingVisitor<'a, V>) -> Self {
+        Self {
+            visitor,
+            current_id: None,
+            offset: 0,
+        }
+    }
+
+    /// Advances the cursor to the first id ≥ `target_id` and returns it, or `None` if
+    /// the iterator is exhausted.
+    ///
+    /// Only the ID bytes are read; the value (e.g. positions stored in `var_size_data`) is
+    /// never touched.
+    pub fn advance_id_until_greater_or_equal(
+        &mut self,
+        target_id: PointOffsetType,
+    ) -> Option<PointOffsetType> {
+        // Fast path: cursor is already at or past the target.
+        if let Some(current) = self.current_id
+            && current >= target_id
+        {
+            return Some(current);
+        }
+
+        if self.offset >= self.visitor.len() {
+            return None;
+        }
+
+        let offset = self
+            .visitor
+            .search_greater_or_equal(target_id, Some(self.offset))?;
+
+        // get_id_by_offset reuses the chunk already decompressed by search_greater_or_equal.
+        let id = self.visitor.get_id_by_offset(offset)?;
+        self.current_id = Some(id);
+        self.offset = offset;
+        Some(id)
+    }
+}

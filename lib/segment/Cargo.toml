@@ -218,3 +218,7 @@ harness = false
 [[bench]]
 name = "hnsw_incremental_build"
 harness = false
+
+[[bench]]
+name = "fuzzy_text_filter"
+harness = false

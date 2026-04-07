@@ -337,7 +337,7 @@ fn test_fuzzy_search_suite() {
         (15, "unrelated document here"),
         (16, "quickly"),
         (17, "Bellamy v. Cracker Barrel"),
-        (18, "Bath Iron Works Corp. v. Congoleum Corp.")
+        (18, "Bath Iron Works Corp. v. Congoleum Corp."),
     ];
 
     let hw_counter = HardwareCounterCell::default();
@@ -402,176 +402,179 @@ fn test_fuzzy_search_suite() {
     // expected_ids = Some(&[]) with ExpansionsAtMost handled separately below
     type MaybeIds = Option<&'static [u32]>;
     let cases: &[(&str, Fuzzy, MaybeIds)] = &[
-        // // ── Text: all tokens must match ───────────────────────────────────────
-        // (
-        //     "text_all_tokens_positive",
-        //     Fuzzy::Text {
-        //         text: "quikly saphire falcon".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[0, 7]),
-        // ),
-        // (
-        //     "text_all_tokens_one_missing_in_corpus",
-        //     Fuzzy::Text {
-        //         text: "quikly saphire zzzzzzzz".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     None,
-        // ),
-        // // ── Edit-distance ceiling ─────────────────────────────────────────────
-        // (
-        //     "two_edit_distance_not_matched",
-        //     Fuzzy::Text {
-        //         text: "slyly".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[14]),
-        // ),
-        // (
-        //     "edit_zero_no_fuzzy_noise",
-        //     Fuzzy::Text {
-        //         text: "quickly sapphire falcon".into(),
-        //         params: fp!(0, 0, 50),
-        //     },
-        //     Some(&[0, 7]),
-        // ),
-        // (
-        //     "edit_zero_rejects_one_edit_neighbours",
-        //     Fuzzy::Text {
-        //         text: "quikly".into(),
-        //         params: fp!(0, 0, 50),
-        //     },
-        //     None,
-        // ),
-        // // ── prefix_length guard ───────────────────────────────────────────────
-        // (
-        //     "prefix2_permissive_includes_quack",
-        //     Fuzzy::Text {
-        //         text: "quick".into(),
-        //         params: fp!(1, 2, 50),
-        //     },
-        //     Some(&[4, 5, 6]),
-        // ),
-        // (
-        //     "prefix3_blocks_quack",
-        //     // "qui" ≠ "qua" → quack filtered even though edit_dist("quick","quack")=1
-        //     Fuzzy::Text {
-        //         text: "quick".into(),
-        //         params: fp!(1, 3, 50),
-        //     },
-        //     Some(&[4, 5]),
-        // ),
-        // (
-        //     "prefix_exceeds_term_length_degrades_to_exact",
-        //     Fuzzy::Text {
-        //         text: "cat".into(),
-        //         params: fp!(1, 99, 50),
-        //     },
-        //     Some(&[8, 13]),
-        // ),
-        // // ── Phrase: token order matters ───────────────────────────────────────
-        // (
-        //     "phrase_correct_order_matches",
-        //     // doc7 has same tokens but reversed → absent
-        //     Fuzzy::Phrase {
-        //         phrase: "quikly saphire falcon".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[0]),
-        // ),
-        // (
-        //     "phrase_reversed_order_matches_only_reversed_doc",
-        //     Fuzzy::Phrase {
-        //         phrase: "falcon saphire quikly".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[7]),
-        // ),
-        // (
-        //     "phrase_fuzzy_bridging_non_adjacent_tokens",
-        //     // "sat" is 1-edit from "mat", so "cat sat" is an adjacent window in doc13 
-        //     // but it too short to fuzzy expand
-        //     Fuzzy::Phrase {
-        //         phrase: "cat mat".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[]),
-        // ),
-        // (
-        //     "phrase_fuzzy_bridging_non_adjacent_tokens_with_prefix_guard",
-        //     Fuzzy::Phrase {
-        //         phrase: "cat mat".into(),
-        //         params: fp!(1, 1, 50),
-        //     },
-        //     Some(&[]),
-        // ),
-        // // ── TextAny: any token suffices ───────────────────────────────────────
-        // (
-        //     "text_any_one_token_matches",
-        //     // "quikly"→{0,1,7,16}  "sloly"→slowly,slyly→{2,14}
-        //     Fuzzy::TextAny {
-        //         text_any: "quikly sloly".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[0, 1, 2, 7, 14, 16]),
-        // ),
-        // (
-        //     "text_any_no_tokens_match",
-        //     Fuzzy::TextAny {
-        //         text_any: "zzzzzz qqqqqq".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     None,
-        // ),
-        // (
-        //     "text_any_failing_token_does_not_pollute_results",
-        //     // "zzzzzz" → nothing; result must equal the "quickly" set exactly
-        //     Fuzzy::TextAny {
-        //         text_any: "quickly zzzzzz".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[0, 1, 7, 16]),
-        // ),
-        // (
-        //     "text_any_single_char_token_from_punctuation_matches",
-        //     Fuzzy::TextAny {
-        //         text_any: "v.".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[17]),
-        // ),
-        // (
-        //     "text_single_char_token_with_punctuation_matches",
-        //     Fuzzy::Text {
-        //         text: "bellamy v. cracker barrel".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[17]),
-        // ),
-        // (
-        //     "phrase_single_char_token_with_punctuation_matches",
-        //     Fuzzy::Phrase {
-        //         phrase: "bellamy v. cracker barrel".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[17]),
-        // ),
-        // // ── Token-boundary / substring guard ─────────────────────────────────
-        // (
-        //     "prefix_substring_not_confused_with_fuzzy",
-        //     // edit_dist("quick","quickly")=2 → must NOT match at max_edits=1
-        //     Fuzzy::Text {
-        //         text: "quick".into(),
-        //         params: fp!(1, 0, 50),
-        //     },
-        //     Some(&[4, 5, 6]),
-        // ),
+        // ── Text: all tokens must match ───────────────────────────────────────
+        (
+            "text_all_tokens_positive",
+            Fuzzy::Text {
+                text: "quikly saphire falcon".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 7]),
+        ),
+        (
+            "text_all_tokens_one_missing_in_corpus",
+            Fuzzy::Text {
+                text: "quikly saphire zzzzzzzz".into(),
+                params: fp!(1, 0, 50),
+            },
+            None,
+        ),
+        // ── Edit-distance ceiling ─────────────────────────────────────────────
+        (
+            "two_edit_distance_not_matched",
+            Fuzzy::Text {
+                text: "slyly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[14]),
+        ),
+        (
+            "edit_zero_no_fuzzy_noise",
+            Fuzzy::Text {
+                text: "quickly sapphire falcon".into(),
+                params: fp!(0, 0, 50),
+            },
+            Some(&[0, 7]),
+        ),
+        (
+            "edit_zero_rejects_one_edit_neighbours",
+            Fuzzy::Text {
+                text: "quikly".into(),
+                params: fp!(0, 0, 50),
+            },
+            None,
+        ),
+        // ── prefix_length guard ───────────────────────────────────────────────
+        (
+            "prefix2_permissive_includes_quack",
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 2, 50),
+            },
+            Some(&[4, 5, 6]),
+        ),
+        (
+            "prefix3_blocks_quack",
+            // "qui" ≠ "qua" → quack filtered even though edit_dist("quick","quack")=1
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 3, 50),
+            },
+            Some(&[4, 5]),
+        ),
+        (
+            "prefix_exceeds_term_length_degrades_to_exact",
+            Fuzzy::Text {
+                text: "cat".into(),
+                params: fp!(1, 99, 50),
+            },
+            Some(&[8, 13]),
+        ),
+        // ── Phrase: token order matters ───────────────────────────────────────
+        (
+            "phrase_correct_order_matches",
+            // doc7 has same tokens but reversed → absent
+            Fuzzy::Phrase {
+                phrase: "quikly saphire falcon".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0]),
+        ),
+        (
+            "phrase_reversed_order_matches_only_reversed_doc",
+            Fuzzy::Phrase {
+                phrase: "falcon saphire quikly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[7]),
+        ),
+        (
+            "phrase_fuzzy_bridging_non_adjacent_tokens",
+            // "sat" is 1-edit from "mat", so "cat sat" is an adjacent window in doc13
+            // but it too short to fuzzy expand
+            Fuzzy::Phrase {
+                phrase: "cat mat".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[]),
+        ),
+        (
+            "phrase_fuzzy_bridging_non_adjacent_tokens_with_prefix_guard",
+            Fuzzy::Phrase {
+                phrase: "cat mat".into(),
+                params: fp!(1, 1, 50),
+            },
+            Some(&[]),
+        ),
+        // ── TextAny: any token suffices ───────────────────────────────────────
+        (
+            "text_any_one_token_matches",
+            // "quikly"→{0,1,7,16}  "sloly"→slowly,slyly→{2,14}
+            Fuzzy::TextAny {
+                text_any: "quikly sloly".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 1, 2, 7, 14, 16]),
+        ),
+        (
+            "text_any_no_tokens_match",
+            Fuzzy::TextAny {
+                text_any: "zzzzzz qqqqqq".into(),
+                params: fp!(1, 0, 50),
+            },
+            None,
+        ),
+        (
+            "text_any_failing_token_does_not_pollute_results",
+            // "zzzzzz" → nothing; result must equal the "quickly" set exactly
+            Fuzzy::TextAny {
+                text_any: "quickly zzzzzz".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[0, 1, 7, 16]),
+        ),
+        (
+            "text_any_single_char_token_from_punctuation_matches",
+            Fuzzy::TextAny {
+                text_any: "v.".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17, 18]),
+        ),
+        (
+            "text_single_char_token_with_punctuation_matches",
+            Fuzzy::Text {
+                text: "bellamy v. cracker barrel".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17]),
+        ),
+        (
+            "phrase_single_char_token_with_punctuation_matches",
+            Fuzzy::Phrase {
+                phrase: "bellamy v. cracker barrel".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[17]),
+        ),
+        // ── Token-boundary / substring guard ─────────────────────────────────
+        (
+            "prefix_substring_not_confused_with_fuzzy",
+            // edit_dist("quick","quickly")=2 → must NOT match at max_edits=1
+            Fuzzy::Text {
+                text: "quick".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[4, 5, 6]),
+        ),
         (
             "real_test",
-            Fuzzy::Phrase { phrase: "Bath Iron Works Corp. v.".into(), params: fp!(1, 0, 50) },
-            Some(&[18])
-        )
+            Fuzzy::Phrase {
+                phrase: "Bath Iron Works Corp. v.".into(),
+                params: fp!(1, 0, 50),
+            },
+            Some(&[18]),
+        ),
     ];
 
     // max_expansions cap — checked separately (result set is implementation-dependent)

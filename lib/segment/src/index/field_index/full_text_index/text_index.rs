@@ -160,7 +160,7 @@ impl FullTextIndex {
         }
     }
 
-    pub(super) fn filter_query<'a>(
+    pub fn filter_query<'a>(
         &'a self,
         query: ParsedQuery,
         hw_counter: &'a HardwareCounterCell,
@@ -356,19 +356,24 @@ impl FullTextIndex {
             Self::Mmap(index) => index.get_fuzzy_index()?,
         };
 
-        let min_len = self.get_tokenizer().tokens_processor().min_token_len.unwrap_or(3);
-                    
+        let min_len = self
+            .get_tokenizer()
+            .tokens_processor()
+            .min_token_len
+            .unwrap_or(3);
+
         // Expand a single query token: run fuzzy search, then resolve term → TokenId.
-        let expand_token = |token: &str, params: &FuzzyParams, min_len: usize| -> AHashSet<TokenId> {
-            if token.chars().count() <= min_len {
-                return self.get_token(token, hw_counter).into_iter().collect();
-            }
-            let candidates = fuzzy_index.search(token, params);
-            candidates
-                .into_iter()
-                .filter_map(|c| self.get_token(&c.term, hw_counter))
-                .collect()
-        };
+        let expand_token =
+            |token: &str, params: &FuzzyParams, min_len: usize| -> AHashSet<TokenId> {
+                if token.chars().count() <= min_len {
+                    return self.get_token(token, hw_counter).into_iter().collect();
+                }
+                let candidates = fuzzy_index.search(token, params);
+                candidates
+                    .into_iter()
+                    .filter_map(|c| self.get_token(&c.term, hw_counter))
+                    .collect()
+            };
 
         match &match_fuzzy.fuzzy {
             Fuzzy::Text { text, params } => {
@@ -390,6 +395,7 @@ impl FullTextIndex {
                 if !has_query_tokens || has_token_without_candidates {
                     return None;
                 }
+                token_sets.sort_unstable_by_key(|ts| ts.len());
 
                 Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(token_sets)))
             }
@@ -426,6 +432,9 @@ impl FullTextIndex {
                 if !has_query_tokens || has_token_without_candidates {
                     return None;
                 }
+
+                token_sets.sort_unstable_by_key(|ts| ts.len());
+
                 Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(token_sets)))
             }
         }

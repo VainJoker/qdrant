@@ -412,9 +412,31 @@ impl MmapInvertedIndex {
         if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
             return false;
         }
-        fuzzy_doc
-            .iter()
-            .all(|group| self.check_has_any(group, point_id))
+
+        fn check_any<V: MmapPostingValue>(
+            postings: &MmapPostings<V>,
+            group: &TokenSet,
+            point_id: PointOffsetType,
+        ) -> bool {
+            group.tokens().iter().any(|token_id| {
+                postings
+                    .get(*token_id)
+                    .unwrap()
+                    .visitor()
+                    .contains(point_id)
+            })
+        }
+
+        // Hoist the postings enum match outside the loop — the variant never changes
+        // between iterations, so we avoid re-dispatching on every group.
+        match &self.storage.postings {
+            MmapPostingsEnum::Ids(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+            MmapPostingsEnum::WithPositions(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+        }
     }
 
     fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {

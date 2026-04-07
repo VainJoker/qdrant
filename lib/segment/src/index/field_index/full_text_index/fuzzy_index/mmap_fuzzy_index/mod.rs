@@ -109,7 +109,7 @@ impl FuzzyIndex for MmapFuzzyIndex {
                 Err(_) => continue,
             };
             let dist = levenshtein(query, term) as u32;
-             if dist != 0 {
+            if dist != 0 {
                 results.push(FuzzyCandidate::new(term.to_string(), query.len(), dist));
             }
             if results.len() >= max {
