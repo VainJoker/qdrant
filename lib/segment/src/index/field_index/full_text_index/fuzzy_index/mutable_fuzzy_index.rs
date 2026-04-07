@@ -59,6 +59,8 @@ impl FuzzyIndex for MutableFuzzyIndex {
         let prefix_len = (params.prefix_length as usize).min(query.len());
         let query_prefix = &query.as_bytes()[..prefix_len];
 
+        buckets[0].push(FuzzyCandidate::new(query.to_string(), query.len(), 0));
+
         'outer: for term in self.terms.iter() {
             if prefix_len > 0 {
                 let term_bytes = term.as_bytes();
@@ -68,7 +70,7 @@ impl FuzzyIndex for MutableFuzzyIndex {
             }
 
             let dist = levenshtein(query, term) as u32;
-            if dist <= u32::from(params.max_edits) {
+            if dist <= u32::from(params.max_edits) && dist > 0 {
                 buckets[dist as usize].push(FuzzyCandidate::new(term.clone(), query.len(), dist));
                 total += 1;
                 if total >= max {

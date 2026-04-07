@@ -356,12 +356,13 @@ impl FullTextIndex {
             Self::Mmap(index) => index.get_fuzzy_index()?,
         };
 
-        // Short tokens are matched exactly to avoid overly broad fuzzy expansions.
-        let expand_token = |token: &str, params: &FuzzyParams| -> AHashSet<TokenId> {
-            if token.chars().count() <= 3 {
+        let min_len = self.get_tokenizer().tokens_processor().min_token_len.unwrap_or(3);
+                    
+        // Expand a single query token: run fuzzy search, then resolve term → TokenId.
+        let expand_token = |token: &str, params: &FuzzyParams, min_len: usize| -> AHashSet<TokenId> {
+            if token.chars().count() <= min_len {
                 return self.get_token(token, hw_counter).into_iter().collect();
             }
-
             let candidates = fuzzy_index.search(token, params);
             candidates
                 .into_iter()
@@ -378,7 +379,7 @@ impl FullTextIndex {
 
                 self.get_tokenizer().tokenize_query(text, |token| {
                     has_query_tokens = true;
-                    let ids = expand_token(token.as_ref(), params);
+                    let ids = expand_token(token.as_ref(), params, min_len);
                     if ids.is_empty() {
                         has_token_without_candidates = true;
                     } else {
@@ -397,7 +398,7 @@ impl FullTextIndex {
                 let mut all_token_ids = AHashSet::new();
 
                 self.get_tokenizer().tokenize_query(text_any, |token| {
-                    all_token_ids.extend(expand_token(token.as_ref(), params));
+                    all_token_ids.extend(expand_token(token.as_ref(), params, min_len));
                 });
 
                 if all_token_ids.is_empty() {
@@ -414,7 +415,7 @@ impl FullTextIndex {
 
                 self.get_tokenizer().tokenize_query(phrase, |token| {
                     has_query_tokens = true;
-                    let ids = expand_token(token.as_ref(), params);
+                    let ids = expand_token(token.as_ref(), params, min_len);
                     if ids.is_empty() {
                         has_token_without_candidates = true;
                     } else {
@@ -425,7 +426,6 @@ impl FullTextIndex {
                 if !has_query_tokens || has_token_without_candidates {
                     return None;
                 }
-                log::debug!("Fuzzy phrase query expanded into {:#?}", token_sets);
                 Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(token_sets)))
             }
         }

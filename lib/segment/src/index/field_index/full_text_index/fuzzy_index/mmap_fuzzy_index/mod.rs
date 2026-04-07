@@ -101,14 +101,17 @@ impl FuzzyIndex for MmapFuzzyIndex {
                 .into_stream()
         };
 
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max + 1);
+        results.push(FuzzyCandidate::new(query.to_string(), query.len(), 0));
         while let Some((term_bytes, _)) = stream.next() {
             let term = match std::str::from_utf8(term_bytes) {
                 Ok(t) => t,
                 Err(_) => continue,
             };
             let dist = levenshtein(query, term) as u32;
-            results.push(FuzzyCandidate::new(term.to_string(), query.len(), dist));
+             if dist != 0 {
+                results.push(FuzzyCandidate::new(term.to_string(), query.len(), dist));
+            }
             if results.len() >= max {
                 break;
             }

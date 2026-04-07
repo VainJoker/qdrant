@@ -213,12 +213,12 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
                 .collect::<Vec<_>>()
         })
         .collect();
-
+ 
     let mut tokens_positions: Vec<TokenPosition> = Vec::new();
-
+ 
     for group_iter in group_iters.iter_mut() {
         let before = tokens_positions.len();
-
+ 
         for (token_id, iter) in group_iter.iter_mut() {
             let Some(elem) = iter.advance_until_greater_or_equal(point_id) else {
                 continue;
@@ -227,15 +227,15 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
                 tokens_positions.extend(elem.value.to_token_positions(*token_id));
             }
         }
-
+ 
         if tokens_positions.len() == before {
             return false;
         }
     }
-
+ 
     tokens_positions.sort_unstable();
     tokens_positions.dedup();
-
+ 
     PartialDocument::new(tokens_positions).has_fuzzy_phrase(phrase)
 }
 
@@ -248,7 +248,7 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
     if phrase.is_empty() {
         return Either::Left(std::iter::empty());
     }
-
+ 
     let group_postings: Vec<Vec<(TokenId, PostingListView<'a, Positions>)>> = phrase
         .iter()
         .map(|group| {
@@ -259,31 +259,30 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
                 .collect::<Vec<_>>()
         })
         .collect();
-
+ 
     if group_postings.iter().any(|views| views.is_empty()) {
         return Either::Left(std::iter::empty());
     }
-
+ 
     let smallest_candidate_group_idx = group_postings
         .iter()
         .enumerate()
         .min_by_key(|(_, views)| views.iter().map(|(_, pl)| pl.len()).sum::<usize>())
         .map(|(idx, _)| idx)
         .unwrap();
-
-    let candidate_views: Vec<PostingListView<'a, Positions>> = group_postings
-        [smallest_candidate_group_idx]
+ 
+    let smallest_candidate_views: Vec<PostingListView<'a, Positions>> = group_postings[smallest_candidate_group_idx]
         .iter()
         .map(|(_, pl)| pl.clone())
         .collect();
-
+ 
     let other_group_postings: Vec<Vec<PostingListView<'a, Positions>>> = group_postings
         .iter()
         .enumerate()
         .filter(|(idx, _)| *idx != smallest_candidate_group_idx)
         .map(|(_, views)| views.iter().map(|(_, pl)| pl.clone()).collect())
         .collect();
-
+ 
     let mut group_iters: Vec<Vec<(TokenId, PostingIterator<'a, Positions>)>> = phrase
         .iter()
         .map(|group| {
@@ -296,18 +295,16 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
                 .collect::<Vec<_>>()
         })
         .collect();
-
+ 
     Either::Right(
-        merge_compressed_postings_iterator(candidate_views, is_active).filter(move |&point_id| {
-            let all_other_groups_hit = other_group_postings.iter().all(|views| {
-                views
-                    .iter()
-                    .any(|pl| pl.clone().visitor().contains(point_id))
-            });
+        merge_compressed_postings_iterator(smallest_candidate_views, is_active).filter(move |&point_id| {
+            let all_other_groups_hit = other_group_postings
+                .iter()
+                .all(|views| views.iter().any(|pl| pl.clone().visitor().contains(point_id)));
             if !all_other_groups_hit {
                 return false;
             }
-
+ 
             let mut tokens_positions: Vec<TokenPosition> = Vec::new();
             for group_iter in group_iters.iter_mut() {
                 let before = tokens_positions.len();
@@ -323,10 +320,10 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
                     return false;
                 }
             }
-
+ 
             tokens_positions.sort_unstable();
             tokens_positions.dedup();
-
+ 
             PartialDocument::new(tokens_positions).has_fuzzy_phrase(&phrase)
         }),
     )
