@@ -2588,7 +2588,7 @@ impl FuzzyParams {
     pub const MAX_EXPANSIONS_CAP: u8 = 30;
 
     fn default_max_edits_distance() -> u8 {
-        1
+        0
     }
 
     fn default_prefix_length() -> u8 {
@@ -2618,7 +2618,7 @@ impl FuzzyParams {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
 pub struct MatchFuzzy {
-    pub fuzzy: Fuzzy,
+    pub fuzzy: Vec<Fuzzy>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]

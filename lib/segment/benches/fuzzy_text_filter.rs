@@ -248,10 +248,10 @@ fn bench_fst_expansion(c: &mut Criterion) {
 
 fn make_match_fuzzy_text(text: &str, params: FuzzyParams) -> MatchFuzzy {
     MatchFuzzy {
-        fuzzy: Fuzzy::Text {
+        fuzzy: vec![Fuzzy::Text {
             text: text.to_string(),
             params: Some(params),
-        },
+        }],
     }
 }
 

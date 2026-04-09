@@ -115,8 +115,8 @@ message Match {
     string phrase = 9;
     // Match any word in the text
     string text_any = 10;
-    // Match text, phrase text, or any word in the text with fuzzy (approximate) matching
-    FuzzyMatch fuzzy = 11;
+    // Match multiple fuzzy clauses with independent parameters
+    RepeatedFuzzy fuzzy = 11;
   }
 }
 
@@ -142,6 +142,10 @@ message FuzzyMatch {
   }
   // Fuzzy matching parameters
   optional FuzzyParams params = 4;
+}
+
+message RepeatedFuzzy {
+  repeated FuzzyMatch fuzzy = 1;
 }
 
 message RepeatedStrings {

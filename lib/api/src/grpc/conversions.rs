@@ -2075,7 +2075,7 @@ impl TryFrom<Match> for segment::types::Match {
                 }
                 MatchValue::Fuzzy(fuzzy) => {
                     segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
-                        fuzzy: grpc_fuzzy_match_to_segment(fuzzy)?,
+                        fuzzy: grpc_fuzzy_matches_to_segment(fuzzy.fuzzy)?,
                     })
                 }
             }),
@@ -2122,13 +2122,21 @@ impl From<segment::types::Match> for Match {
                 MatchValue::TextAny(text_any)
             }
             segment::types::Match::Fuzzy(segment::types::MatchFuzzy { fuzzy }) => {
-                MatchValue::Fuzzy(segment_fuzzy_match_to_grpc(fuzzy))
+                MatchValue::Fuzzy(grpc::RepeatedFuzzy {
+                    fuzzy: fuzzy.into_iter().map(segment_fuzzy_match_to_grpc).collect(),
+                })
             }
         };
         Self {
             match_value: Some(match_value),
         }
     }
+}
+
+fn grpc_fuzzy_matches_to_segment(
+    fuzzy: Vec<grpc::FuzzyMatch>,
+) -> Result<Vec<segment::types::Fuzzy>, Status> {
+    fuzzy.into_iter().map(grpc_fuzzy_match_to_segment).collect()
 }
 
 fn grpc_fuzzy_match_to_segment(fuzzy: grpc::FuzzyMatch) -> Result<segment::types::Fuzzy, Status> {

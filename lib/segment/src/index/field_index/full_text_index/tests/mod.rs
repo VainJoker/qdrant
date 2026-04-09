@@ -591,7 +591,7 @@ fn test_fuzzy_search_suite() {
         for (iname, index) in &indices {
             let maybe_parsed = index.parse_fuzzy_query(
                 &MatchFuzzy {
-                    fuzzy: fuzzy.clone(),
+                    fuzzy: vec![fuzzy.clone()],
                 },
                 &hw_counter,
             );
@@ -632,7 +632,7 @@ fn test_fuzzy_search_suite() {
         for (iname, index) in &indices {
             let Some(parsed) = index.parse_fuzzy_query(
                 &MatchFuzzy {
-                    fuzzy: fuzzy.clone(),
+                    fuzzy: vec![fuzzy.clone()],
                 },
                 &hw_counter,
             ) else {
@@ -650,6 +650,250 @@ fn test_fuzzy_search_suite() {
                 "expected at most {max} expanded terms, got {count}"
             );
         }
+    }
+}
+
+#[test]
+fn test_multi_fuzzy_clause_semantics() {
+    const DOCS: &[(u32, &str)] = &[
+        (0, "quickly sapphire falcon glides"),
+        (1, "quickly amber rabbit hops"),
+        (2, "slowly crimson falcon sleeps"),
+        (3, "gentle bronze badger rests"),
+        (4, "quick fox jumps"),
+        (5, "quirk bug appears"),
+        (6, "quack duck swims"),
+        (7, "falcon sapphire quickly"),
+        (8, "cat"),
+        (9, "bat"),
+        (10, "rat"),
+        (11, "mat"),
+        (12, "hat"),
+        (13, "the cat sat on the mat"),
+        (14, "slyly crimson falcon"),
+        (15, "unrelated document here"),
+        (16, "quickly"),
+        (17, "Bellamy v. Cracker Barrel"),
+        (18, "Bath Iron Works Corp. v. Congoleum Corp."),
+    ];
+
+    let hw_counter = HardwareCounterCell::default();
+
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        lowercase: Some(true),
+        ..Default::default()
+    };
+
+    let dir0 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir1 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir2 = Builder::new().prefix("test_dir").tempdir().unwrap();
+
+    let mut mutable = FullTextIndex::builder_gridstore(dir0.path().to_path_buf(), config.clone())
+        .make_empty()
+        .unwrap();
+
+    let mut immutable_b =
+        FullTextIndex::builder_mmap(dir1.path().to_path_buf(), config.clone(), false);
+    immutable_b.init().unwrap();
+
+    let mut mmap_b = FullTextIndex::builder_mmap(dir2.path().to_path_buf(), config, true);
+    mmap_b.init().unwrap();
+
+    for (id, text) in DOCS {
+        let value = text.to_string();
+        mutable
+            .add_many(*id, vec![value.clone()], &hw_counter)
+            .unwrap();
+        immutable_b
+            .add_many(*id, vec![value.clone()], &hw_counter)
+            .unwrap();
+        mmap_b.add_many(*id, vec![value], &hw_counter).unwrap();
+    }
+
+    let immutable = immutable_b.finalize().unwrap();
+    let mmap = mmap_b.finalize().unwrap();
+
+    let indices = [
+        ("mutable", &mutable),
+        ("immutable", &immutable),
+        ("mmap", &mmap),
+    ];
+
+    macro_rules! fp {
+        ($e:expr, $p:expr, $x:expr) => {
+            Some(FuzzyParams {
+                max_edits: $e,
+                prefix_length: $p,
+                max_expansions: $x,
+            })
+        };
+    }
+
+    fn assert_matches_variant(parsed: &ParsedQuery, variant: &str) {
+        match variant {
+            "all" => assert!(matches!(parsed, ParsedQuery::AllTokens(_))),
+            "any" => assert!(matches!(parsed, ParsedQuery::AnyTokens(_))),
+            "phrase" => assert!(matches!(parsed, ParsedQuery::Phrase(_))),
+            "fuzzy_all" => assert!(matches!(parsed, ParsedQuery::FuzzyAllTokens(_))),
+            "fuzzy_any" => assert!(matches!(parsed, ParsedQuery::FuzzyAnyTokens(_))),
+            "fuzzy_phrase" => assert!(matches!(parsed, ParsedQuery::FuzzyPhrase(_))),
+            other => panic!("unknown variant {other}"),
+        }
+    }
+
+    let assert_query = |name: &str,
+                        match_fuzzy: MatchFuzzy,
+                        expected_variant: &str,
+                        expected_ids: &[u32]| {
+        for (iname, index) in &indices {
+            let Some(parsed) = index.parse_fuzzy_query(&match_fuzzy, &hw_counter) else {
+                panic!("[{name}|{iname}] parse returned None");
+            };
+
+            assert_matches_variant(&parsed, expected_variant);
+
+            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).collect();
+            let expected: HashSet<u32> = expected_ids.iter().copied().collect();
+
+            assert_eq!(
+                actual,
+                expected,
+                "[{name}|{iname}]\n  missing={:?}\n  extra={:?}",
+                expected.difference(&actual).collect::<Vec<_>>(),
+                actual.difference(&expected).collect::<Vec<_>>()
+            );
+        }
+    };
+
+    assert_query(
+        "multi_text_exact_becomes_all_tokens",
+        MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::Text {
+                    text: "quickly sapphire".into(),
+                    params: fp!(0, 0, 50),
+                },
+                Fuzzy::Text {
+                    text: "falcon".into(),
+                    params: fp!(0, 0, 50),
+                },
+            ],
+        },
+        "all",
+        &[0, 7],
+    );
+
+    assert_query(
+        "multi_text_fuzzy_becomes_fuzzy_all_tokens",
+        MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::Text {
+                    text: "quikly saphire".into(),
+                    params: fp!(1, 0, 50),
+                },
+                Fuzzy::Text {
+                    text: "falcon".into(),
+                    params: fp!(1, 0, 50),
+                },
+            ],
+        },
+        "fuzzy_all",
+        &[0, 7],
+    );
+
+    assert_query(
+        "multi_text_any_exact_flattens_to_any_tokens",
+        MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::TextAny {
+                    text_any: "quickly slowly".into(),
+                    params: fp!(0, 0, 50),
+                },
+                Fuzzy::TextAny {
+                    text_any: "falcon rabbit".into(),
+                    params: fp!(0, 0, 50),
+                },
+            ],
+        },
+        "any",
+        &[0, 1, 2, 7, 14, 16],
+    );
+
+    assert_query(
+        "single_text_any_exact_stays_any_tokens",
+        MatchFuzzy {
+            fuzzy: vec![Fuzzy::TextAny {
+                text_any: "quickly slowly".into(),
+                params: fp!(0, 0, 50),
+            }],
+        },
+        "any",
+        &[0, 1, 2, 7, 16],
+    );
+
+    assert_query(
+        "multi_phrase_exact_concatenates_in_order",
+        MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::Phrase {
+                    phrase: "quickly sapphire".into(),
+                    params: fp!(0, 0, 50),
+                },
+                Fuzzy::Phrase {
+                    phrase: "falcon".into(),
+                    params: fp!(0, 0, 50),
+                },
+            ],
+        },
+        "phrase",
+        &[0],
+    );
+
+    assert_query(
+        "multi_phrase_fuzzy_becomes_fuzzy_phrase",
+        MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::Phrase {
+                    phrase: "quikly saphire".into(),
+                    params: fp!(1, 0, 50),
+                },
+                Fuzzy::Phrase {
+                    phrase: "falcon".into(),
+                    params: fp!(1, 0, 50),
+                },
+            ],
+        },
+        "fuzzy_phrase",
+        &[0],
+    );
+
+    for (iname, index) in &indices {
+        let mixed = MatchFuzzy {
+            fuzzy: vec![
+                Fuzzy::Text {
+                    text: "quickly".into(),
+                    params: fp!(1, 0, 50),
+                },
+                Fuzzy::Phrase {
+                    phrase: "sapphire falcon".into(),
+                    params: fp!(1, 0, 50),
+                },
+            ],
+        };
+        assert!(
+            index.parse_fuzzy_query(&mixed, &hw_counter).is_none(),
+            "[mixed_types_rejected|{iname}] expected parse to return None"
+        );
+
+        let empty = MatchFuzzy { fuzzy: vec![] };
+        assert!(
+            index.parse_fuzzy_query(&empty, &hw_counter).is_none(),
+            "[empty_fuzzy_rejected|{iname}] expected parse to return None"
+        );
     }
 }
 

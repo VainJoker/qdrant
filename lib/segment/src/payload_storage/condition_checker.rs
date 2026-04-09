@@ -172,7 +172,7 @@ impl ValueChecker for Match {
                     .any(|token| stored.contains(token)),
                 _ => false,
             },
-            Match::Fuzzy(MatchFuzzy { fuzzy }) => match fuzzy {
+            Match::Fuzzy(MatchFuzzy { fuzzy }) => fuzzy.iter().all(|fuzzy| match fuzzy {
                 Fuzzy::Text { text, params: _ }
                 | crate::types::Fuzzy::Phrase {
                     phrase: text,
@@ -190,7 +190,7 @@ impl ValueChecker for Match {
                         .any(|token| stored.contains(token)),
                     _ => false,
                 },
-            },
+            }),
             Match::Any(MatchAny { any }) => match (payload, any) {
                 (Value::String(stored), AnyVariants::Strings(list)) => {
                     if list.len() < INDEXSET_ITER_THRESHOLD {

@@ -311,9 +311,9 @@ pub mod r#match {
         /// Match any word in the text
         #[prost(string, tag = "10")]
         TextAny(::prost::alloc::string::String),
-        /// Match text, phrase text, or any word in the text with fuzzy (approximate) matching
+        /// Match multiple fuzzy clauses with independent parameters
         #[prost(message, tag = "11")]
-        Fuzzy(super::FuzzyMatch),
+        Fuzzy(super::RepeatedFuzzy),
     }
 }
 /// Parameters for fuzzy (approximate) matching
@@ -358,6 +358,13 @@ pub mod fuzzy_match {
         #[prost(string, tag = "3")]
         TextAny(::prost::alloc::string::String),
     }
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RepeatedFuzzy {
+    #[prost(message, repeated, tag = "1")]
+    pub fuzzy: ::prost::alloc::vec::Vec<FuzzyMatch>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]

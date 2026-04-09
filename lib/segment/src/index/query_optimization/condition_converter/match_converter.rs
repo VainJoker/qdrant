@@ -7,7 +7,7 @@ use crate::index::field_index::FieldIndex;
 use crate::index::query_optimization::optimized_filter::ConditionCheckerFn;
 use crate::payload_storage::condition_checker::INDEXSET_ITER_THRESHOLD;
 use crate::types::{
-    AnyVariants, Fuzzy, FuzzyParams, Match, MatchAny, MatchExcept, MatchFuzzy, MatchPhrase,
+    AnyVariants, Fuzzy, Match, MatchAny, MatchExcept, MatchFuzzy, MatchPhrase,
     MatchText, MatchTextAny, MatchValue, ValueVariants,
 };
 
@@ -28,26 +28,10 @@ pub fn get_match_checkers(
             get_match_text_checker(phrase, TextQueryType::Phrase, index, hw_acc)
         }
         Match::Fuzzy(MatchFuzzy {
-            fuzzy: Fuzzy::Phrase { phrase, params },
+            fuzzy
         }) => get_match_text_checker(
-            phrase,
-            TextQueryType::FuzzyPhrase(params.unwrap_or_default()),
-            index,
-            hw_acc,
-        ),
-        Match::Fuzzy(MatchFuzzy {
-            fuzzy: Fuzzy::Text { text, params },
-        }) => get_match_text_checker(
-            text,
-            TextQueryType::FuzzyText(params.unwrap_or_default()),
-            index,
-            hw_acc,
-        ),
-        Match::Fuzzy(MatchFuzzy {
-            fuzzy: Fuzzy::TextAny { text_any, params },
-        }) => get_match_text_checker(
-            text_any,
-            TextQueryType::FuzzyTextAny(params.unwrap_or_default()),
+            String::new(),
+            TextQueryType::Fuzzy(fuzzy),
             index,
             hw_acc,
         ),
@@ -283,9 +267,7 @@ enum TextQueryType {
     Phrase,
     Text,
     TextAny,
-    FuzzyPhrase(FuzzyParams),
-    FuzzyText(FuzzyParams),
-    FuzzyTextAny(FuzzyParams),
+    Fuzzy(Vec<Fuzzy>),
 }
 
 fn get_match_text_checker(
@@ -297,33 +279,12 @@ fn get_match_text_checker(
     let hw_counter = hw_acc.get_counter_cell();
     match index {
         FieldIndex::FullTextIndex(full_text_index) => {
-            let is_fuzzy = matches!(
+            if matches!(
                 &query_type,
-                TextQueryType::FuzzyPhrase(_)
-                    | TextQueryType::FuzzyText(_)
-                    | TextQueryType::FuzzyTextAny(_)
-            );
-
-            if is_fuzzy {
+                TextQueryType::Fuzzy(_)
+            ) {
                 let match_fuzzy = match query_type {
-                    TextQueryType::FuzzyPhrase(params) => MatchFuzzy {
-                        fuzzy: crate::types::Fuzzy::Phrase {
-                            phrase: text,
-                            params: Some(params),
-                        },
-                    },
-                    TextQueryType::FuzzyText(params) => MatchFuzzy {
-                        fuzzy: crate::types::Fuzzy::Text {
-                            text,
-                            params: Some(params),
-                        },
-                    },
-                    TextQueryType::FuzzyTextAny(params) => MatchFuzzy {
-                        fuzzy: crate::types::Fuzzy::TextAny {
-                            text_any: text,
-                            params: Some(params),
-                        },
-                    },
+                    TextQueryType::Fuzzy(fuzzy) => MatchFuzzy { fuzzy },
                     _ => unreachable!(),
                 };
                 let Some(fuzzy_query) =
