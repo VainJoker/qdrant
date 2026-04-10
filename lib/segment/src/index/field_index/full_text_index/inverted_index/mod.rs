@@ -17,7 +17,7 @@ use itertools::Itertools;
 
 use crate::common::operation_error::OperationResult;
 use crate::index::field_index::{CardinalityEstimation, PayloadBlockCondition, PrimaryCondition};
-use crate::index::query_estimator::expected_should_estimation;
+use crate::index::query_estimator::{combine_must_estimations, expected_should_estimation};
 use crate::types::{FieldCondition, Match, PayloadKeyType};
 
 pub type TokenId = u32;
@@ -300,9 +300,7 @@ pub trait InvertedIndex {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
             }
             ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
-                // Union all expanded token IDs for a subset-style estimate.
-                let all_tokens = fuzzy_doc.all_tokens();
-                self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter)
+                self.estimate_has_fuzzy_all_cardinality(fuzzy_doc, condition, hw_counter)
             }
             ParsedQuery::FuzzyAnyTokens(tokens) => {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
@@ -398,6 +396,25 @@ pub trait InvertedIndex {
         }
     }
 
+    fn estimate_has_fuzzy_all_cardinality(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        condition: &FieldCondition,
+        hw_counter: &HardwareCounterCell,
+    ) -> CardinalityEstimation {
+        if fuzzy_doc.is_empty() {
+            return CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
+        }
+
+        let group_estimations = fuzzy_doc
+            .iter()
+            .map(|group| self.estimate_has_any_cardinality(group, condition, hw_counter))
+            .collect::<Vec<_>>();
+
+        combine_must_estimations(&group_estimations, self.points_count())
+    }
+
     fn estimate_has_phrase_cardinality(
         &self,
         phrase: &Document,
@@ -435,14 +452,15 @@ pub trait InvertedIndex {
             return CardinalityEstimation::exact(0)
                 .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone())));
         }
-        let all_tokens = fuzzy_doc.all_tokens();
-        let any_est = self.estimate_has_any_cardinality(&all_tokens, condition, hw_counter);
+
+        let fuzzy_all_est =
+            self.estimate_has_fuzzy_all_cardinality(fuzzy_doc, condition, hw_counter);
         let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
         CardinalityEstimation {
-            primary_clauses: any_est.primary_clauses,
-            min: any_est.min / phrase_sq,
-            exp: any_est.exp / phrase_sq,
-            max: any_est.max / phrase_sq,
+            primary_clauses: fuzzy_all_est.primary_clauses,
+            min: fuzzy_all_est.min / phrase_sq,
+            exp: fuzzy_all_est.exp / phrase_sq,
+            max: fuzzy_all_est.max / phrase_sq,
         }
     }
 
@@ -489,10 +507,13 @@ mod tests {
     use rand::seq::SliceRandom;
     use rstest::rstest;
 
-    use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+    use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
     use crate::index::field_index::full_text_index::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
     use crate::index::field_index::full_text_index::inverted_index::mmap_inverted_index::MmapInvertedIndex;
     use crate::index::field_index::full_text_index::inverted_index::mutable_inverted_index::MutableInvertedIndex;
+    use crate::index::query_estimator::combine_must_estimations;
+    use crate::json_path::JsonPath;
+    use crate::types::{FieldCondition, Match};
 
     fn generate_word() -> String {
         let mut rng = rand::rng();
@@ -557,7 +578,6 @@ mod tests {
             index.index_tokens(idx, token_set, &hw_counter).unwrap();
         }
 
-        // Remove some points
         let mut points_to_delete = (0..indexed_count).collect::<Vec<_>>();
         points_to_delete.shuffle(&mut rand::rng());
         for idx in &points_to_delete[..deleted_count as usize] {
@@ -800,5 +820,96 @@ mod tests {
             assert_eq!(mut_filtered, imm_filtered);
             assert_eq!(imm_filtered, imm_mmap_filtered);
         }
+    }
+    fn test_field_condition() -> FieldCondition {
+        FieldCondition::new_match(JsonPath::new("text"), Match::new_text("placeholder"))
+    }
+
+    fn build_test_index(with_positions: bool) -> (MutableInvertedIndex, Vec<TokenId>) {
+        let mut index = MutableInvertedIndex::new(with_positions);
+        let hw_counter = HardwareCounterCell::new();
+
+        let docs = [
+            ["red", "apple"],
+            ["green", "apple"],
+            ["red", "berry"],
+            ["blue", "berry"],
+        ];
+
+        for (idx, doc) in docs.iter().enumerate() {
+            let token_ids = index.register_tokens(doc);
+            if with_positions {
+                index
+                    .index_document(idx as u32, Document::new(token_ids.clone()), &hw_counter)
+                    .unwrap();
+            }
+            index
+                .index_tokens(idx as u32, TokenSet::from_iter(token_ids), &hw_counter)
+                .unwrap();
+        }
+
+        let token_ids = ["red", "green", "apple", "berry"]
+            .into_iter()
+            .map(|token| index.get_token_id(token, &hw_counter).unwrap())
+            .collect();
+
+        (index, token_ids)
+    }
+
+    #[test]
+    fn test_fuzzy_all_cardinality_is_combined_per_group() {
+        let hw_counter = HardwareCounterCell::new();
+        let condition = test_field_condition();
+        let (index, token_ids) = build_test_index(false);
+        let [red, green, apple, berry] = token_ids.as_slice() else {
+            panic!("unexpected token ids");
+        };
+
+        let group_a = TokenSet::from_iter([*red, *green]);
+        let group_b = TokenSet::from_iter([*apple, *berry]);
+        let fuzzy_doc = FuzzyDocument::new(vec![group_a.clone(), group_b.clone()]);
+
+        let estimation = index.estimate_cardinality(
+            &ParsedQuery::FuzzyAllTokens(fuzzy_doc),
+            &condition,
+            &hw_counter,
+        );
+
+        let expected = combine_must_estimations(
+            &[
+                index.estimate_has_any_cardinality(&group_a, &condition, &hw_counter),
+                index.estimate_has_any_cardinality(&group_b, &condition, &hw_counter),
+            ],
+            index.points_count(),
+        );
+
+        assert!(estimation.equals_min_exp_max(&expected));
+    }
+
+    #[test]
+    fn test_fuzzy_phrase_cardinality_is_scaled_from_fuzzy_all() {
+        let hw_counter = HardwareCounterCell::new();
+        let condition = test_field_condition();
+        let (index, token_ids) = build_test_index(true);
+        let [red, green, apple, berry] = token_ids.as_slice() else {
+            panic!("unexpected token ids");
+        };
+
+        let group_a = TokenSet::from_iter([*red, *green]);
+        let group_b = TokenSet::from_iter([*apple, *berry]);
+        let fuzzy_doc = FuzzyDocument::new(vec![group_a.clone(), group_b.clone()]);
+
+        let estimation = index.estimate_cardinality(
+            &ParsedQuery::FuzzyPhrase(fuzzy_doc.clone()),
+            &condition,
+            &hw_counter,
+        );
+
+        let base = index.estimate_has_fuzzy_all_cardinality(&fuzzy_doc, &condition, &hw_counter);
+        let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
+
+        assert_eq!(estimation.min, base.min / phrase_sq);
+        assert_eq!(estimation.exp, base.exp / phrase_sq);
+        assert_eq!(estimation.max, base.max / phrase_sq);
     }
 }
