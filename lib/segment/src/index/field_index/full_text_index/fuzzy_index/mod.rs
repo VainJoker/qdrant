@@ -9,6 +9,17 @@ pub(super) use mutable_fuzzy_index::MutableFuzzyIndex;
 
 use crate::types::FuzzyParams;
 
+pub(super) fn prefix_char_boundary(query: &str, prefix_len: usize) -> usize {
+    query
+        .char_indices()
+        .nth(prefix_len)
+        .map_or(query.len(), |(index, _)| index)
+}
+
+pub(super) fn prefix_chars(query: &str, prefix_len: usize) -> &str {
+    &query[..prefix_char_boundary(query, prefix_len)]
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct FuzzyCandidate {
     pub term: String,

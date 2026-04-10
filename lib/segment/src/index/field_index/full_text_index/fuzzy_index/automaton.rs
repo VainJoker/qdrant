@@ -4,6 +4,8 @@ use std::error::Error;
 use fst::Automaton;
 use fst::automaton::Levenshtein;
 
+use super::prefix_chars;
+
 pub struct PrefixLevenshtein {
     prefix: Vec<u8>,
     lev: Levenshtein,
@@ -11,8 +13,7 @@ pub struct PrefixLevenshtein {
 
 impl PrefixLevenshtein {
     pub fn new(query: &str, prefix_len: usize, distance: u32) -> Result<Self, Box<dyn Error>> {
-        let clamped = prefix_len.min(query.len());
-        let prefix = query.as_bytes()[..clamped].to_vec();
+        let prefix = prefix_chars(query, prefix_len).as_bytes().to_vec();
         let lev = Levenshtein::new(query, distance)?;
         Ok(Self { prefix, lev })
     }

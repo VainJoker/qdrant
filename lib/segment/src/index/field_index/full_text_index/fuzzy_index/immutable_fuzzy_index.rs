@@ -1,7 +1,7 @@
 use fst::{IntoStreamer, Set, Streamer};
 use strsim::levenshtein;
 
-use super::FuzzyIndex;
+use super::{FuzzyIndex, prefix_chars};
 use crate::index::field_index::full_text_index::fuzzy_index::automaton::PrefixLevenshtein;
 use crate::index::field_index::full_text_index::fuzzy_index::{
     FuzzyCandidate, MmapFuzzyIndex, MutableFuzzyIndex,
@@ -31,8 +31,7 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
             return Vec::new();
         };
 
-        let prefix_bytes =
-            &query.as_bytes()[..params.prefix_length.min(query.len() as u8) as usize];
+        let prefix_bytes = prefix_chars(query, params.prefix_length as usize).as_bytes();
         let mut stream = if prefix_bytes.is_empty() {
             self.index.search(&automaton).into_stream()
         } else {
@@ -42,9 +41,8 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
         let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(max + 1);
         results.push(FuzzyCandidate::new(query.to_string(), query.len(), 0));
         while let Some(term_bytes) = stream.next() {
-            let term = match std::str::from_utf8(term_bytes) {
-                Ok(t) => t,
-                Err(_) => continue,
+            let Ok(term) = std::str::from_utf8(term_bytes) else {
+                continue;
             };
             let dist = levenshtein(query, term) as u32;
             if dist != 0 {

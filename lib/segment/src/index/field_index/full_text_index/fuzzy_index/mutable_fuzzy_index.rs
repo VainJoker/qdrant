@@ -3,7 +3,7 @@ use std::ops::Bound;
 
 use strsim::levenshtein;
 
-use super::FuzzyIndex;
+use super::{FuzzyIndex, prefix_chars};
 use crate::index::field_index::full_text_index::fuzzy_index::FuzzyCandidate;
 use crate::types::FuzzyParams;
 
@@ -58,14 +58,7 @@ impl FuzzyIndex for MutableFuzzyIndex {
 
         let query_char_len = query.chars().count();
 
-        // Compute a char-boundary-safe prefix for BTreeSet range seek.
-        // char_indices().nth(n) gives the byte offset of the n-th character, so
-        // &query[..prefix_char_end] is always a valid UTF-8 slice.
-        let prefix_char_end = query
-            .char_indices()
-            .nth(params.prefix_length as usize)
-            .map_or(query.len(), |(i, _)| i);
-        let query_prefix = &query[..prefix_char_end];
+        let query_prefix = prefix_chars(query, params.prefix_length as usize);
 
         buckets[0].push(FuzzyCandidate::new(query.to_string(), query.len(), 0));
 

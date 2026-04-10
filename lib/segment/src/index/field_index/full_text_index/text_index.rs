@@ -376,7 +376,7 @@ impl FullTextIndex {
             merged_groups.extend(self.parse_single_fuzzy_query(fuzzy, hw_counter)?);
         }
 
-        self.build_fuzzy_query(query_kind?, fuzziness, merged_groups)
+        FullTextIndex::build_fuzzy_query(query_kind?, fuzziness, merged_groups)
     }
 
     fn parse_single_fuzzy_query(
@@ -451,7 +451,6 @@ impl FullTextIndex {
             return None;
         }
 
-
         Some(token_sets)
     }
 
@@ -516,7 +515,6 @@ impl FullTextIndex {
     }
 
     fn build_fuzzy_query(
-        &self,
         query_kind: FuzzyQueryKind,
         fuzziness: Fuzziness,
         merged_groups: Vec<TokenSet>,
@@ -530,7 +528,9 @@ impl FullTextIndex {
                         .collect::<TokenSet>();
                     Some(ParsedQuery::AllTokens(tokens))
                 } else {
-                    Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(merged_groups)))
+                    Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(
+                        merged_groups,
+                    )))
                 }
             }
             FuzzyQueryKind::TextAny => {

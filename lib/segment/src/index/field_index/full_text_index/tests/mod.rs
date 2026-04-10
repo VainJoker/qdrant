@@ -745,29 +745,28 @@ fn test_multi_fuzzy_clause_semantics() {
         }
     }
 
-    let assert_query = |name: &str,
-                        match_fuzzy: MatchFuzzy,
-                        expected_variant: &str,
-                        expected_ids: &[u32]| {
-        for (iname, index) in &indices {
-            let Some(parsed) = index.parse_fuzzy_query(&match_fuzzy, &hw_counter) else {
-                panic!("[{name}|{iname}] parse returned None");
-            };
+    let assert_query =
+        |name: &str, match_fuzzy: MatchFuzzy, expected_variant: &str, expected_ids: &[u32]| {
+            for (iname, index) in &indices {
+                let Some(parsed) = index.parse_fuzzy_query(&match_fuzzy, &hw_counter) else {
+                    panic!("[{name}|{iname}] parse returned None");
+                };
 
-            assert_matches_variant(&parsed, expected_variant);
+                assert_matches_variant(&parsed, expected_variant);
 
-            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).collect();
-            let expected: HashSet<u32> = expected_ids.iter().copied().collect();
+                let actual: HashSet<u32> =
+                    index.filter_query(parsed.clone(), &hw_counter).collect();
+                let expected: HashSet<u32> = expected_ids.iter().copied().collect();
 
-            assert_eq!(
-                actual,
-                expected,
-                "[{name}|{iname}]\n  missing={:?}\n  extra={:?}",
-                expected.difference(&actual).collect::<Vec<_>>(),
-                actual.difference(&expected).collect::<Vec<_>>()
-            );
-        }
-    };
+                assert_eq!(
+                    actual,
+                    expected,
+                    "[{name}|{iname}]\n  missing={:?}\n  extra={:?}",
+                    expected.difference(&actual).collect::<Vec<_>>(),
+                    actual.difference(&expected).collect::<Vec<_>>()
+                );
+            }
+        };
 
     assert_query(
         "multi_text_exact_becomes_all_tokens",
@@ -893,6 +892,83 @@ fn test_multi_fuzzy_clause_semantics() {
         assert!(
             index.parse_fuzzy_query(&empty, &hw_counter).is_none(),
             "[empty_fuzzy_rejected|{iname}] expected parse to return None"
+        );
+    }
+}
+
+#[test]
+fn test_fuzzy_prefix_length_uses_char_boundaries_for_all_backends() {
+    const DOCS: &[(u32, &str)] = &[(0, "éclair"), (1, "êclair"), (2, "éclait")];
+
+    let hw_counter = HardwareCounterCell::default();
+
+    let config = TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        lowercase: Some(true),
+        ..Default::default()
+    };
+
+    let dir0 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir1 = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let dir2 = Builder::new().prefix("test_dir").tempdir().unwrap();
+
+    let mut mutable = FullTextIndex::builder_gridstore(dir0.path().to_path_buf(), config.clone())
+        .make_empty()
+        .unwrap();
+
+    let mut immutable_b =
+        FullTextIndex::builder_mmap(dir1.path().to_path_buf(), config.clone(), false);
+    immutable_b.init().unwrap();
+
+    let mut mmap_b = FullTextIndex::builder_mmap(dir2.path().to_path_buf(), config, true);
+    mmap_b.init().unwrap();
+
+    for (id, text) in DOCS {
+        let value = text.to_string();
+        mutable
+            .add_many(*id, vec![value.clone()], &hw_counter)
+            .unwrap();
+        immutable_b
+            .add_many(*id, vec![value.clone()], &hw_counter)
+            .unwrap();
+        mmap_b.add_many(*id, vec![value], &hw_counter).unwrap();
+    }
+
+    let immutable = immutable_b.finalize().unwrap();
+    let mmap = mmap_b.finalize().unwrap();
+
+    let indices = [
+        ("mutable", &mutable),
+        ("immutable", &immutable),
+        ("mmap", &mmap),
+    ];
+
+    let query = MatchFuzzy {
+        fuzzy: vec![Fuzzy::Text {
+            text: "éclair".into(),
+            params: Some(FuzzyParams {
+                max_edits: 1,
+                prefix_length: 1,
+                max_expansions: 50,
+            }),
+        }],
+    };
+
+    let expected: HashSet<u32> = [0, 2].into_iter().collect();
+
+    for (iname, index) in &indices {
+        let Some(parsed) = index.parse_fuzzy_query(&query, &hw_counter) else {
+            panic!("[{iname}] parse returned None");
+        };
+
+        let actual: HashSet<u32> = index.filter_query(parsed, &hw_counter).collect();
+
+        assert_eq!(
+            actual, expected,
+            "[{iname}] expected UTF-8 prefix guard to exclude terms whose first character differs"
         );
     }
 }
