@@ -4396,8 +4396,14 @@ mod tests {
             .expect("max_edits property must exist")
             .into_object();
 
-        assert_eq!(max_edits.number.as_ref().and_then(|number| number.minimum), Some(0.0));
-        assert_eq!(max_edits.number.as_ref().and_then(|number| number.maximum), Some(2.0));
+        assert_eq!(
+            max_edits.number.as_ref().and_then(|number| number.minimum),
+            Some(0.0)
+        );
+        assert_eq!(
+            max_edits.number.as_ref().and_then(|number| number.maximum),
+            Some(2.0)
+        );
     }
 
     /// Regression test: DateTimePayloadType binary serialization roundtrip.

@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::fuzzy_index::FuzzyIndex;
+use super::immutable_text_index::ImmutableFullTextIndex;
 use super::inverted_index::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
-use super::immutable_text_index::{ImmutableFullTextIndex};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
 use super::mutable_text_index::MutableFullTextIndex;
 use super::tokenizers::Tokenizer;

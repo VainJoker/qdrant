@@ -295,11 +295,8 @@ mod tests {
                 fuzzy_matching: Some(true),
                 ..TextIndexParams::default()
             };
-            let mut builder = FullTextMmapIndexBuilder::new(
-                temp_dir.path().to_path_buf(),
-                config,
-                is_on_disk,
-            );
+            let mut builder =
+                FullTextMmapIndexBuilder::new(temp_dir.path().to_path_buf(), config, is_on_disk);
             let payload = Value::String("hello world".to_owned());
             let hw_counter = HardwareCounterCell::new();
 

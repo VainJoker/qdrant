@@ -338,7 +338,6 @@ impl InvertedIndex for MutableInvertedIndex {
             ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
                 Box::new(self.filter_fuzzy_phrase(fuzzy_doc).map(Ok))
             }
-
         }
     }
 

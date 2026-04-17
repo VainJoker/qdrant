@@ -181,13 +181,10 @@ fn test_ram_usage_bytes_includes_fuzzy_index_for_mutable_and_immutable() {
 
     let mutable_ram_usage = |enable_fuzzy| {
         let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
-        let mut index = FullTextIndex::new_gridstore(
-            temp_dir.path().to_path_buf(),
-            config(enable_fuzzy),
-            true,
-        )
-        .unwrap()
-        .unwrap();
+        let mut index =
+            FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), config(enable_fuzzy), true)
+                .unwrap()
+                .unwrap();
 
         for (point_id, doc) in docs.iter().enumerate() {
             index
@@ -690,7 +687,10 @@ fn test_fuzzy_search_suite() {
                 panic!("[{name}|{iname}] parse returned None but expected non-empty results");
             };
 
-            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).filter_map(Result::ok).collect();
+            let actual: HashSet<u32> = index
+                .filter_query(parsed.clone(), &hw_counter)
+                .filter_map(Result::ok)
+                .collect();
 
             for (point_id, _) in DOCS {
                 let via_check = index.check_match(&parsed, *point_id);
@@ -841,8 +841,10 @@ fn test_multi_fuzzy_clause_semantics() {
 
                 assert_matches_variant(&parsed, expected_variant);
 
-                let actual: HashSet<u32> =
-                    index.filter_query(parsed.clone(), &hw_counter).filter_map(Result::ok).collect();
+                let actual: HashSet<u32> = index
+                    .filter_query(parsed.clone(), &hw_counter)
+                    .filter_map(Result::ok)
+                    .collect();
                 let expected: HashSet<u32> = expected_ids.iter().copied().collect();
 
                 assert_eq!(
@@ -1051,7 +1053,10 @@ fn test_fuzzy_prefix_length_uses_char_boundaries_for_all_backends() {
             panic!("[{iname}] parse returned None");
         };
 
-        let actual: HashSet<u32> = index.filter_query(parsed, &hw_counter).filter_map(Result::ok).collect();
+        let actual: HashSet<u32> = index
+            .filter_query(parsed, &hw_counter)
+            .filter_map(Result::ok)
+            .collect();
 
         assert_eq!(
             actual, expected,
