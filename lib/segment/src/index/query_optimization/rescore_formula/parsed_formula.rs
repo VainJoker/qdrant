@@ -111,7 +111,7 @@ pub enum DistKind {
     /// Levenshtein distance
     Levenshtein,
     /// Jaro-Winkler
-    JaroWinlker,
+    JaroWinkler,
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Serialize, PartialOrd, Ord)]

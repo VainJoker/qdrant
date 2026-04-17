@@ -11,11 +11,10 @@ use common::cow::BoxCow;
 #[cfg(target_os = "linux")]
 use common::cpu::linux_low_thread_priority;
 use common::flags::FeatureFlags;
-use common::fs::clear_disk_cache;
 use common::progress_tracker::ProgressTracker;
 use common::types::{PointOffsetType, ScoredPointOffset, TelemetryDetail};
 use fs_err as fs;
-use itertools::EitherOrBoth;
+use itertools::{EitherOrBoth, Itertools};
 use log::{debug, trace};
 use parking_lot::Mutex;
 use rand::Rng;
@@ -530,9 +529,9 @@ impl HNSWIndex {
 
             let required_connectivity = if average_links_per_0_level_int >= 4 {
                 let global_graph_connectivity = [
-                    graph_layers_builder.subgraph_connectivity(&all_points, percolation),
-                    graph_layers_builder.subgraph_connectivity(&all_points, percolation),
-                    graph_layers_builder.subgraph_connectivity(&all_points, percolation),
+                    graph_layers_builder.subgraph_connectivity(rng, &all_points, percolation),
+                    graph_layers_builder.subgraph_connectivity(rng, &all_points, percolation),
+                    graph_layers_builder.subgraph_connectivity(rng, &all_points, percolation),
                 ];
 
                 debug!("graph connectivity: {global_graph_connectivity:?} @ {percolation}");
@@ -626,8 +625,11 @@ impl HNSWIndex {
                         && let Some(required_connectivity) = required_connectivity
                     {
                         // Always build for tenants
-                        let graph_connectivity = graph_layers_builder
-                            .subgraph_connectivity(&points_to_index, percolation);
+                        let graph_connectivity = graph_layers_builder.subgraph_connectivity(
+                            rng,
+                            &points_to_index,
+                            percolation,
+                        );
 
                         if graph_connectivity >= required_connectivity {
                             trace!(
@@ -751,7 +753,7 @@ impl HNSWIndex {
             payload_index.estimate_cardinality(&filter, &disposed_hw_counter)?;
         let point_mappings = id_tracker.point_mappings();
 
-        Ok(payload_index
+        payload_index
             .iter_filtered_points(
                 &filter,
                 id_tracker,
@@ -761,8 +763,8 @@ impl HNSWIndex {
                 stopped,
                 None,
             )?
-            .filter(|&point_id| !deleted_bitslice.get_bit(point_id as usize).unwrap_or(false))
-            .collect())
+            .filter_ok(|&point_id| !deleted_bitslice.get_bit(point_id as usize).unwrap_or(false))
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1207,7 +1209,7 @@ impl HNSWIndex {
     fn search_plain_iterator_batched(
         &self,
         query_vectors: &[&QueryVector],
-        points: impl Iterator<Item = PointOffsetType>,
+        points: impl Iterator<Item = OperationResult<PointOffsetType>>,
         top: usize,
         params: Option<&SearchParams>,
         vector_query_context: &VectorQueryContext,
@@ -1252,7 +1254,7 @@ impl HNSWIndex {
     fn search_plain_batched(
         &self,
         vectors: &[&QueryVector],
-        filtered_points: impl Iterator<Item = PointOffsetType>,
+        filtered_points: impl Iterator<Item = OperationResult<PointOffsetType>>,
         top: usize,
         params: Option<&SearchParams>,
         vector_query_context: &VectorQueryContext,
@@ -1274,7 +1276,7 @@ impl HNSWIndex {
         vector_query_context: &VectorQueryContext,
     ) -> OperationResult<Vec<Vec<ScoredPointOffset>>> {
         let id_tracker = self.id_tracker.borrow();
-        let ids_iterator = id_tracker.point_mappings().iter_internal();
+        let ids_iterator = id_tracker.point_mappings().iter_internal().map(Ok);
         self.search_plain_iterator_batched(vectors, ids_iterator, top, params, vector_query_context)
     }
 
@@ -1394,9 +1396,18 @@ impl HNSWIndex {
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        for file in self.graph.files(&self.path) {
-            clear_disk_cache(&file)?
-        }
+        let Self {
+            id_tracker: _,
+            vector_storage: _,
+            quantized_vectors: _,
+            payload_index: _,
+            config: _,
+            path: _,
+            graph,
+            searches_telemetry: _,
+            is_on_disk: _,
+        } = self;
+        graph.clear_cache()?;
         Ok(())
     }
 }
@@ -1418,7 +1429,7 @@ impl VectorIndex for HNSWIndex {
         // And if so, we need to fall back to plain search (optionally, with quantization).
 
         let is_hnsw_disabled = self.config.m == 0 && self.config.payload_m.unwrap_or(0) == 0;
-        let exact = params.map(|params| params.exact).unwrap_or(false);
+        let exact = params.is_some_and(|params| params.exact);
 
         let exact_params = if exact {
             params.map(|params| {

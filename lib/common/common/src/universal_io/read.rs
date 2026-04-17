@@ -26,11 +26,59 @@ pub trait UniversalRead<T: Copy + 'static>: UniversalReadFileOps {
         })
     }
 
-    fn read_batch<P: AccessPattern>(
+    fn read_batch<'a, P: AccessPattern, Meta: 'a>(
+        &'a self,
+        ranges: impl IntoIterator<Item = (Meta, ReadRange)>,
+        callback: impl FnMut(Meta, &[T]) -> Result<()>,
+    ) -> Result<()>;
+
+    /// Like [`read_batch`](Self::read_batch), but returns a fallible iterator instead of
+    /// accepting a callback.
+    fn read_iter<P: AccessPattern, Meta>(
+        &self,
+        ranges: impl IntoIterator<Item = (Meta, ReadRange)>,
+    ) -> Result<impl Iterator<Item = Result<(Meta, Cow<'_, [T]>)>>> {
+        Ok(ranges
+            .into_iter()
+            .map(move |(meta, range)| self.read::<P>(range).map(|data| (meta, data))))
+    }
+
+    /// Iterates over the provided ranges, reading a few elements at a time,
+    /// but returning in a per-element basis.
+    ///
+    /// The provided ranges can span many elements, they will be auto-chunked
+    /// by this function to ensure each read is not too big. The argument is an
+    /// iterator just so that it is possible to read from non-contiguous regions
+    /// in the same output iterator.
+    fn read_iter_autobatched(
         &self,
         ranges: impl IntoIterator<Item = ReadRange>,
-        callback: impl FnMut(usize, &[T]) -> Result<()>,
-    ) -> Result<()>;
+    ) -> Result<impl Iterator<Item = Result<T>>> {
+        let ranges = ranges
+            .into_iter()
+            .flat_map(|range| range.iter_autochunks::<T>())
+            .map(|chunk| ((), chunk));
+        let mut iter = self.read_iter::<Sequential, _>(ranges)?;
+        let mut current_chunk: Cow<'_, [T]> = Cow::Borrowed(&[]);
+        let mut current_chunk_pos = 0;
+        Ok(std::iter::from_fn(move || {
+            loop {
+                if current_chunk_pos < current_chunk.len() {
+                    let pos = current_chunk_pos;
+                    current_chunk_pos += 1;
+                    return Some(Ok(current_chunk[pos]));
+                }
+                match iter.next() {
+                    Some(Ok(((), next_chunk))) => {
+                        current_chunk = next_chunk;
+                        current_chunk_pos = 0;
+                    }
+                    Some(Err(e)) => return Some(Err(e)),
+                    None => return None,
+                }
+            }
+        }))
+    }
 
     fn len(&self) -> Result<u64>;
 
@@ -41,28 +89,37 @@ pub trait UniversalRead<T: Copy + 'static>: UniversalReadFileOps {
 
     /// Ask to evict related data from RAM cache, if applicable for this implementation.
     ///
-    /// For example in MMAP-based files we do `fadvise` with `POSIX_FADV_DONTNEED`.
+    /// For example in MMAP-based files we do `madvise` with `MADV_PAGEOUT`.
     fn clear_ram_cache(&self) -> Result<()>;
 
     /// Read from multiple files in a single operation.
-    fn read_multi<P: AccessPattern>(
-        files: &[Self],
-        reads: impl IntoIterator<Item = (FileIndex, ReadRange)>,
-        mut callback: impl FnMut(usize, FileIndex, &[T]) -> Result<()>,
-    ) -> Result<()> {
-        for (operation_index, (file_index, range)) in reads.into_iter().enumerate() {
-            let file = files
-                .get(file_index)
-                .ok_or(UniversalIoError::InvalidFileIndex {
-                    file_index,
-                    files: files.len(),
-                })?;
-
+    fn read_multi<'a, P: AccessPattern, Meta: 'a>(
+        reads: impl IntoIterator<Item = (Meta, &'a Self, ReadRange)>,
+        mut callback: impl FnMut(Meta, &[T]) -> Result<()>,
+    ) -> Result<()>
+    where
+        Self: 'a,
+    {
+        for (meta, file, range) in reads {
             let data = file.read::<P>(range)?;
-            callback(operation_index, file_index, &data)?;
+            callback(meta, &data)?;
         }
 
         Ok(())
+    }
+
+    /// Like [`read_multi`](Self::read_multi), but returns a fallible iterator instead of
+    /// accepting a callback.
+    fn read_multi_iter<'a, P: AccessPattern, Meta>(
+        reads: impl IntoIterator<Item = (Meta, &'a Self, ReadRange)>,
+    ) -> Result<impl Iterator<Item = Result<(Meta, Cow<'a, [T]>)>>>
+    where
+        Self: 'a,
+    {
+        Ok(reads.into_iter().map(move |(meta, file, range)| {
+            let data = file.read::<P>(range)?;
+            Ok((meta, data))
+        }))
     }
 
     // When adding provided methods, don't forget to update impls in crate::universal_io::wrappers::*.

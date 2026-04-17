@@ -129,7 +129,7 @@ impl From<DistKind> for PyDistKind {
     fn from(value: DistKind) -> Self {
         match value {
             DistKind::Levenshtein => PyDistKind::Levenshtein,
-            DistKind::JaroWinlker => PyDistKind::JaroWinkler,
+            DistKind::JaroWinkler => PyDistKind::JaroWinkler,
         }
     }
 }
@@ -138,7 +138,7 @@ impl From<PyDistKind> for DistKind {
     fn from(value: PyDistKind) -> Self {
         match value {
             PyDistKind::Levenshtein => DistKind::Levenshtein,
-            PyDistKind::JaroWinkler => DistKind::JaroWinlker,
+            PyDistKind::JaroWinkler => DistKind::JaroWinkler,
         }
     }
 }

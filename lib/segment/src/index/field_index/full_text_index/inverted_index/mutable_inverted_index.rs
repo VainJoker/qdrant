@@ -34,18 +34,6 @@ impl MutableInvertedIndex {
         }
     }
 
-    #[cfg(feature = "rocksdb")]
-    pub fn build_index(
-        iter: impl Iterator<Item = OperationResult<(PointOffsetType, Vec<String>)>>,
-        phrase_matching: bool,
-    ) -> OperationResult<Self> {
-        let mut builder = super::mutable_inverted_index_builder::MutableInvertedIndexBuilder::new(
-            phrase_matching,
-        );
-        builder.add_iter(iter)?;
-        Ok(builder.build())
-    }
-
     fn get_tokens(&self, idx: PointOffsetType) -> Option<&TokenSet> {
         self.point_to_tokens.get(idx as usize)?.as_ref()
     }
@@ -337,15 +325,20 @@ impl InvertedIndex for MutableInvertedIndex {
         &self,
         query: ParsedQuery,
         _hw_counter: &HardwareCounterCell,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + '_> {
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + '_> {
         match query {
-            ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens)),
-            ParsedQuery::Phrase(phrase) => self.filter_has_phrase(phrase),
+            ParsedQuery::AllTokens(tokens) => Box::new(self.filter_has_all(tokens).map(Ok)),
+            ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase).map(Ok)),
             ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
-                Box::new(self.filter_has_any(tokens))
+                Box::new(self.filter_has_any(tokens).map(Ok))
             }
-            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.filter_fuzzy_all_tokens(fuzzy_doc),
-            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.filter_fuzzy_phrase(fuzzy_doc),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                Box::new(self.filter_fuzzy_all_tokens(fuzzy_doc).map(Ok))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                Box::new(self.filter_fuzzy_phrase(fuzzy_doc).map(Ok))
+            }
+
         }
     }
 
@@ -409,5 +402,47 @@ impl InvertedIndex for MutableInvertedIndex {
 
     fn get_token_id(&self, token: &str, _hw_counter: &HardwareCounterCell) -> Option<TokenId> {
         self.vocab.get(token).copied()
+    }
+}
+
+impl MutableInvertedIndex {
+    /// Approximate RAM usage in bytes.
+    pub fn ram_usage_bytes(&self) -> usize {
+        let Self {
+            postings,
+            vocab,
+            point_to_tokens,
+            point_to_doc,
+            points_count: _,
+        } = self;
+
+        let postings_bytes: usize = postings.capacity() * std::mem::size_of::<PostingList>()
+            + postings.iter().map(|p| p.heap_bytes()).sum::<usize>();
+        let hashmap_entry_overhead = std::mem::size_of::<u64>() + std::mem::size_of::<usize>();
+        let vocab_base_bytes = vocab.capacity()
+            * (std::mem::size_of::<String>()
+                + std::mem::size_of::<TokenId>()
+                + hashmap_entry_overhead);
+        // String heap data
+        let vocab_heap_bytes: usize = vocab.keys().map(|s| s.capacity()).sum();
+        // TokenSet wraps Vec<TokenId> — account for heap allocation
+        let ptt_bytes: usize = point_to_tokens.capacity() * std::mem::size_of::<Option<TokenSet>>()
+            + point_to_tokens
+                .iter()
+                .filter_map(|opt| opt.as_ref())
+                .map(|ts| ts.heap_bytes())
+                .sum::<usize>();
+        // Document wraps Vec<TokenId> — account for heap allocation
+        let ptd_bytes: usize = point_to_doc
+            .as_ref()
+            .map(|v| {
+                v.capacity() * std::mem::size_of::<Option<Document>>()
+                    + v.iter()
+                        .filter_map(|opt| opt.as_ref())
+                        .map(|doc| doc.heap_bytes())
+                        .sum::<usize>()
+            })
+            .unwrap_or(0);
+        postings_bytes + vocab_base_bytes + vocab_heap_bytes + ptt_bytes + ptd_bytes
     }
 }

@@ -4,15 +4,16 @@ use std::path::{Path, PathBuf};
 
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use common::bitvec::{BitSlice, BitSliceExt as _, BitVec};
-use common::mmap::{AdviceSetting, MmapSlice, create_and_ensure_length, open_write_mmap};
+use common::mmap::create_and_ensure_length;
 use common::types::PointOffsetType;
-use common::universal_io::OpenOptions;
+use common::universal_io::{
+    MmapFile, OpenOptions, SliceBufferedUpdateWrapper, TypedStorage, UniversalRead, UniversalWrite,
+};
 use fs_err::File;
 use uuid::Uuid;
 
 use crate::common::Flusher;
-use crate::common::mmap_bitslice_buffered_update_wrapper::MmapBitSliceBufferedUpdateWrapper;
-use crate::common::mmap_slice_buffered_update_wrapper::MmapSliceBufferedUpdateWrapper;
+use crate::common::buffered_update_bitslice::BufferedUpdateBitSlice;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::stored_bitslice::MmapBitSlice;
 use crate::id_tracker::compressed::compressed_point_mappings::CompressedPointMappings;
@@ -56,15 +57,32 @@ impl ExternalIdType {
 pub struct ImmutableIdTracker {
     path: PathBuf,
 
-    deleted_wrapper: MmapBitSliceBufferedUpdateWrapper,
+    deleted_wrapper: BufferedUpdateBitSlice<MmapFile>,
 
     internal_to_version: CompressedVersions,
-    internal_to_version_wrapper: MmapSliceBufferedUpdateWrapper<SeqNumberType>,
+    internal_to_version_wrapper: SliceBufferedUpdateWrapper<MmapFile, SeqNumberType>,
 
     mappings: CompressedPointMappings,
 }
 
 impl ImmutableIdTracker {
+    /// Approximate RAM usage in bytes for in-memory data structures.
+    ///
+    /// ImmutableIdTracker loads all mappings and versions into compressed
+    /// in-memory structures. The mmap files are used for persistence but
+    /// the working data lives in RAM.
+    pub fn ram_usage_bytes(&self) -> usize {
+        let Self {
+            path: _,
+            deleted_wrapper: _, // mmap-backed, accounted via files
+            internal_to_version,
+            internal_to_version_wrapper: _, // mmap-backed, accounted via files
+            mappings,
+        } = self;
+
+        internal_to_version.ram_usage_bytes() + mappings.ram_usage_bytes()
+    }
+
     pub fn from_in_memory_tracker(
         in_memory_tracker: InMemoryIdTracker,
         path: &Path,
@@ -255,18 +273,25 @@ impl ImmutableIdTracker {
         let mut deleted_bitvec = BitVec::new();
         deleted_bitvec.extend_from_bitslice(deleted_storage.read_all()?.as_ref());
 
-        let deleted_wrapper = MmapBitSliceBufferedUpdateWrapper::new(deleted_storage);
+        let deleted_wrapper = BufferedUpdateBitSlice::new(deleted_storage);
 
-        let internal_to_version_map = open_write_mmap(
-            &Self::version_mapping_file_path(segment_path),
-            AdviceSetting::Global,
-            true,
+        let internal_to_version_file = TypedStorage::<MmapFile, SeqNumberType>::open(
+            Self::version_mapping_file_path(segment_path),
+            OpenOptions {
+                writeable: true,
+                need_sequential: false,
+                disk_parallel: None,
+                populate: Some(true),
+                advice: None,
+                prevent_caching: None,
+            },
         )?;
-        let internal_to_version_mapslice: MmapSlice<SeqNumberType> =
-            unsafe { MmapSlice::try_from(internal_to_version_map)? };
-        let internal_to_version = CompressedVersions::from_slice(&internal_to_version_mapslice);
+
+        let internal_to_version_slice = internal_to_version_file.read_whole()?;
+
+        let internal_to_version = CompressedVersions::from_slice(&internal_to_version_slice);
         let internal_to_version_wrapper =
-            MmapSliceBufferedUpdateWrapper::new(internal_to_version_mapslice);
+            SliceBufferedUpdateWrapper::new(internal_to_version_file.inner)?;
 
         let reader = BufReader::new(File::open(Self::mappings_file_path(segment_path))?);
         let mappings = Self::load_mapping(reader, Some(deleted_bitvec))?;
@@ -309,7 +334,7 @@ impl ImmutableIdTracker {
 
         deleted_storage.flusher()()?;
 
-        let deleted_wrapper = MmapBitSliceBufferedUpdateWrapper::new(deleted_storage);
+        let deleted_wrapper = BufferedUpdateBitSlice::new(deleted_storage);
 
         // Create mmap file for internal-to-version list
         let version_filepath = Self::version_mapping_file_path(path);
@@ -326,22 +351,27 @@ impl ImmutableIdTracker {
             let version_size = mmap_size::<SeqNumberType>(min_size);
             create_and_ensure_length(&version_filepath, version_size)?;
         }
-        let mut internal_to_version_wrapper = unsafe {
-            MmapSlice::try_from(open_write_mmap(
-                &version_filepath,
-                AdviceSetting::Global,
-                false,
-            )?)?
-        };
 
-        internal_to_version_wrapper[..internal_to_version.len()]
-            .copy_from_slice(internal_to_version);
-        let internal_to_version = CompressedVersions::from_slice(&internal_to_version_wrapper);
+        let mut internal_to_version_file = TypedStorage::<MmapFile, SeqNumberType>::open(
+            &version_filepath,
+            OpenOptions {
+                writeable: true,
+                need_sequential: false,
+                disk_parallel: None,
+                populate: Some(false),
+                advice: None,
+                prevent_caching: None,
+            },
+        )?;
+        internal_to_version_file.write(0, internal_to_version)?;
+
+        let internal_to_version =
+            CompressedVersions::from_slice(&internal_to_version_file.read_whole()?);
 
         debug_assert_eq!(internal_to_version.len(), mappings.total_point_count());
 
         let internal_to_version_wrapper =
-            MmapSliceBufferedUpdateWrapper::new(internal_to_version_wrapper);
+            SliceBufferedUpdateWrapper::new(internal_to_version_file.inner)?;
 
         // Write mappings to disk.
         let file = File::create(Self::mappings_file_path(path))?;
@@ -457,7 +487,8 @@ impl IdTracker for ImmutableIdTracker {
 
     /// Creates a flusher function, that writes the points versions to disk.
     fn versions_flusher(&self) -> Flusher {
-        self.internal_to_version_wrapper.flusher()
+        let flusher = self.internal_to_version_wrapper.flusher();
+        Box::new(move || flusher().map_err(OperationError::from))
     }
 
     fn total_point_count(&self) -> usize {
@@ -508,15 +539,11 @@ pub(super) mod test {
     use std::collections::{HashMap, HashSet};
 
     use itertools::Itertools;
-    #[cfg(feature = "rocksdb")]
-    use rand::Rng;
     use rand::prelude::*;
     use tempfile::Builder;
     use uuid::Uuid;
 
     use super::*;
-    #[cfg(feature = "rocksdb")]
-    use crate::id_tracker::simple_id_tracker::SimpleIdTracker;
 
     const RAND_SEED: u64 = 42;
 
@@ -901,98 +928,6 @@ pub(super) mod test {
             assert_eq!(
                 in_memory_id_tracker.external_id(internal),
                 immutable_id_tracker.external_id(internal)
-            );
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "rocksdb")]
-    fn simple_id_tracker_vs_immutable_tracker_congruence() {
-        use crate::common::rocksdb_wrapper::{DB_VECTOR_CF, open_db};
-
-        let dir = Builder::new().prefix("storage_dir").tempdir().unwrap();
-        let db = open_db(dir.path(), &[DB_VECTOR_CF]).unwrap();
-
-        let mut id_tracker = InMemoryIdTracker::new();
-        let mut simple_id_tracker = SimpleIdTracker::open(db).unwrap();
-
-        // Insert 100 random points into id_tracker
-
-        let num_points = 200;
-        let mut rng = StdRng::seed_from_u64(RAND_SEED);
-
-        for _ in 0..num_points {
-            // Generate num id in range from 0 to 100
-
-            let point_id = PointIdType::NumId(rng.random_range(0..num_points as u64));
-
-            let version = rng.random_range(0..1000);
-
-            let internal_id_mmap = id_tracker.total_point_count() as PointOffsetType;
-            let internal_id_simple = simple_id_tracker.total_point_count() as PointOffsetType;
-
-            assert_eq!(internal_id_mmap, internal_id_simple);
-
-            if id_tracker.internal_id(point_id).is_some() {
-                id_tracker.drop(point_id).unwrap();
-            }
-            id_tracker.set_link(point_id, internal_id_mmap).unwrap();
-            id_tracker
-                .set_internal_version(internal_id_mmap, version)
-                .unwrap();
-
-            if simple_id_tracker.internal_id(point_id).is_some() {
-                simple_id_tracker.drop(point_id).unwrap();
-            }
-            simple_id_tracker
-                .set_link(point_id, internal_id_simple)
-                .unwrap();
-            simple_id_tracker
-                .set_internal_version(internal_id_simple, version)
-                .unwrap();
-        }
-
-        let immutable_id_tracker =
-            ImmutableIdTracker::from_in_memory_tracker(id_tracker, dir.path()).unwrap();
-        drop(immutable_id_tracker);
-
-        let immutable_id_tracker = ImmutableIdTracker::open(dir.path()).unwrap();
-
-        for (external_id, internal_id) in simple_id_tracker.point_mappings().iter_from(None) {
-            assert_eq!(
-                simple_id_tracker.internal_version(internal_id).unwrap(),
-                immutable_id_tracker.internal_version(internal_id).unwrap()
-            );
-            assert_eq!(
-                simple_id_tracker.external_id(internal_id),
-                immutable_id_tracker.external_id(internal_id)
-            );
-            assert_eq!(
-                external_id,
-                immutable_id_tracker.external_id(internal_id).unwrap()
-            );
-            assert_eq!(
-                simple_id_tracker.external_id(internal_id).unwrap(),
-                immutable_id_tracker.external_id(internal_id).unwrap()
-            );
-        }
-
-        for (external_id, internal_id) in immutable_id_tracker.point_mappings().iter_from(None) {
-            assert_eq!(
-                simple_id_tracker.internal_version(internal_id).unwrap(),
-                immutable_id_tracker.internal_version(internal_id).unwrap()
-            );
-            assert_eq!(
-                simple_id_tracker.external_id(internal_id),
-                immutable_id_tracker.external_id(internal_id)
-            );
-            assert_eq!(
-                external_id,
-                simple_id_tracker.external_id(internal_id).unwrap()
-            );
-            assert_eq!(
-                simple_id_tracker.external_id(internal_id).unwrap(),
-                immutable_id_tracker.external_id(internal_id).unwrap()
             );
         }
     }

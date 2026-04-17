@@ -1032,9 +1032,10 @@ impl ShardReplicaSet {
         let remotes = self.remotes.read().await;
 
         let Some(remote) = remotes.iter().find(|remote| remote.peer_id == peer_id) else {
-            return Err(CollectionError::NotFound {
-                what: format!("{}/{}:{} shard", peer_id, self.collection_id, self.shard_id),
-            });
+            return Err(CollectionError::not_found(format!(
+                "{}/{}:{} shard",
+                peer_id, self.collection_id, self.shard_id
+            )));
         };
 
         remote.health_check().await?;
@@ -1052,9 +1053,10 @@ impl ShardReplicaSet {
         let local_shard_guard = self.local.read().await;
 
         let Some(local_shard) = local_shard_guard.deref() else {
-            return Err(CollectionError::NotFound {
-                what: format!("local shard {}:{}", self.collection_id, self.shard_id),
-            });
+            return Err(CollectionError::not_found(format!(
+                "local shard {}:{}",
+                self.collection_id, self.shard_id
+            )));
         };
 
         let mut next_offset = Some(ExtendedPointId::NumId(0));
@@ -1289,9 +1291,7 @@ impl ShardReplicaSet {
     pub(crate) async fn shard_recovery_point(&self) -> CollectionResult<RecoveryPoint> {
         let local_shard = self.local.read().await;
         let Some(local_shard) = local_shard.as_ref() else {
-            return Err(CollectionError::NotFound {
-                what: "Peer does not have local shard".into(),
-            });
+            return Err(CollectionError::not_found("Peer does not have local shard"));
         };
 
         local_shard.shard_recovery_point().await
@@ -1304,9 +1304,7 @@ impl ShardReplicaSet {
     ) -> CollectionResult<()> {
         let local_shard = self.local.read().await;
         let Some(local_shard) = local_shard.as_ref() else {
-            return Err(CollectionError::NotFound {
-                what: "Peer does not have local shard".into(),
-            });
+            return Err(CollectionError::not_found("Peer does not have local shard"));
         };
 
         local_shard.update_cutoff(cutoff).await
@@ -1320,9 +1318,7 @@ impl ShardReplicaSet {
         let local = self.local.read().await;
 
         let Some(local) = local.as_ref() else {
-            return Err(CollectionError::NotFound {
-                what: "Peer does not have local shard".into(),
-            });
+            return Err(CollectionError::not_found("Peer does not have local shard"));
         };
 
         local.get_wal_entries(count).await
@@ -1437,6 +1433,49 @@ impl ShardReplicaSet {
         }
 
         Ok(response)
+    }
+
+    /// Get memory report from only the local shard.
+    ///
+    /// Used by the internal gRPC handler to return local data
+    /// without querying remote shards (which would cause recursion).
+    pub async fn local_memory_report(
+        &self,
+    ) -> CollectionResult<crate::common::memory_reporter::CollectionMemoryReport> {
+        let local = self.local.read().await;
+        match local.as_ref() {
+            Some(Shard::Local(local_shard)) => local_shard.memory_report().await,
+            Some(Shard::Proxy(proxy_shard)) => proxy_shard.memory_report().await,
+            Some(Shard::ForwardProxy(forward_shard)) => forward_shard.memory_report().await,
+            Some(Shard::QueueProxy(queue_shard)) => queue_shard.memory_report().await,
+            Some(Shard::Dummy(_)) | None => {
+                Ok(crate::common::memory_reporter::CollectionMemoryReport::default())
+            }
+        }
+    }
+
+    /// Collect memory reports from both local and remote shards.
+    pub async fn memory_report(
+        &self,
+    ) -> CollectionResult<crate::common::memory_reporter::CollectionMemoryReport> {
+        use crate::common::memory_reporter::CollectionMemoryReport;
+
+        let local_future = self.local_memory_report();
+        let remote_futures = async {
+            let remotes = self.remotes.read().await;
+            let futures: Vec<_> = remotes
+                .iter()
+                .map(|remote| remote.memory_report())
+                .collect();
+            futures::future::try_join_all(futures).await
+        };
+
+        let (local_report, remote_reports) =
+            futures::future::try_join(local_future, remote_futures).await?;
+
+        let mut all_reports = vec![local_report];
+        all_reports.extend(remote_reports);
+        Ok(CollectionMemoryReport::merge_all(all_reports))
     }
 
     /// Get optimizations info from only the local shard.

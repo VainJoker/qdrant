@@ -317,7 +317,7 @@ impl FormulaScorer<'_> {
                     super::parsed_formula::DistKind::Levenshtein => {
                         Ok(normalized_levenshtein(&value, query))
                     }
-                    super::parsed_formula::DistKind::JaroWinlker => Ok(jaro_winkler(&value, query)),
+                    super::parsed_formula::DistKind::JaroWinkler => Ok(jaro_winkler(&value, query)),
                 }
             }
         }

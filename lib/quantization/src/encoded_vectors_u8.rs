@@ -375,7 +375,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_score(score as f32, query.offset, vector_offset)
+                    .postprocess_score(score, query.offset, vector_offset)
             }
         }
     }
@@ -396,7 +396,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_internal_score(score as f32, query_offset, vector_offset)
+                    .postprocess_internal_score(score, query_offset, vector_offset)
             }
         }
     }
@@ -417,7 +417,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_score(score as f32, query.offset, vector_offset)
+                    .postprocess_score(score, query.offset, vector_offset)
             }
         }
     }
@@ -438,7 +438,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_internal_score(score as f32, query_offset, vector_offset)
+                    .postprocess_internal_score(score, query_offset, vector_offset)
             }
         }
     }
@@ -459,7 +459,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_score(score as f32, query.offset, vector_offset)
+                    .postprocess_score(score, query.offset, vector_offset)
             }
         }
     }
@@ -480,7 +480,7 @@ impl<TStorage: EncodedStorage> EncodedVectorsU8<TStorage> {
                     },
                 };
                 self.metadata
-                    .postprocess_internal_score(score as f32, query_offset, vector_offset)
+                    .postprocess_internal_score(score, query_offset, vector_offset)
             }
         }
     }
@@ -703,6 +703,16 @@ impl<TStorage: EncodedStorage> EncodedVectors for EncodedVectorsU8<TStorage> {
             files.push(meta_path.clone());
         }
         files
+    }
+
+    fn heap_size_bytes(&self) -> usize {
+        let Self {
+            encoded_vectors,
+            metadata: _,
+            metadata_path: _,
+        } = self;
+
+        encoded_vectors.heap_size_bytes()
     }
 
     type SupportsBytes = True;

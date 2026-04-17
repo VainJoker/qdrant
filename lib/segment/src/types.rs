@@ -868,6 +868,37 @@ pub struct BinaryQuantization {
     pub binary: BinaryQuantizationConfig,
 }
 
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TurboQuantBitSize {
+    Bits1,
+    Bits1_5,
+    Bits2,
+    #[default]
+    Bits4,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize, JsonSchema, Validate)]
+#[serde(rename_all = "snake_case")]
+pub struct TurboQuantQuantizationConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub always_ram: Option<bool>,
+
+    // TODO(turbo): Remove before release
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plus: Option<bool>,
+
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bits: Option<TurboQuantBitSize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize, JsonSchema, Validate)]
+pub struct TurboQuantization {
+    #[validate(nested)]
+    pub turbo: TurboQuantQuantizationConfig,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Deserialize, Serialize, JsonSchema, Anonymize)]
 #[serde(untagged, rename_all = "snake_case")]
 #[anonymize(false)]
@@ -875,6 +906,7 @@ pub enum QuantizationConfig {
     Scalar(ScalarQuantization),
     Product(ProductQuantization),
     Binary(BinaryQuantization),
+    Turbo(TurboQuantization),
 }
 
 impl QuantizationConfig {
@@ -896,7 +928,19 @@ impl QuantizationConfig {
     }
 
     pub fn supports_appendable(&self) -> bool {
-        matches!(self, QuantizationConfig::Binary(_))
+        matches!(
+            self,
+            QuantizationConfig::Binary(_) | QuantizationConfig::Turbo(_)
+        )
+    }
+
+    pub fn always_ram(&self) -> bool {
+        match self {
+            QuantizationConfig::Scalar(s) => s.scalar.always_ram == Some(true),
+            QuantizationConfig::Product(p) => p.product.always_ram == Some(true),
+            QuantizationConfig::Binary(b) => b.binary.always_ram == Some(true),
+            QuantizationConfig::Turbo(t) => t.turbo.always_ram == Some(true),
+        }
     }
 }
 
@@ -906,6 +950,7 @@ impl Validate for QuantizationConfig {
             QuantizationConfig::Scalar(scalar) => scalar.validate(),
             QuantizationConfig::Product(product) => product.validate(),
             QuantizationConfig::Binary(binary) => binary.validate(),
+            QuantizationConfig::Turbo(turbo) => turbo.validate(),
         }
     }
 }
@@ -1362,12 +1407,6 @@ impl Default for Indexes {
 #[derive(Anonymize, Debug, Deserialize, Serialize, JsonSchema, Copy, Clone, PartialEq, Eq)]
 #[serde(tag = "type", content = "options", rename_all = "snake_case")]
 pub enum PayloadStorageType {
-    // Store payload in memory and use persistence storage only if vectors are changed
-    #[cfg(feature = "rocksdb")]
-    InMemory,
-    // Store payload on disk only, read each time it is requested
-    #[cfg(feature = "rocksdb")]
-    OnDisk,
     // Store payload on disk and in memory, read from memory if possible
     Mmap,
     // Store payload on disk and in memory, populate on load
@@ -1391,10 +1430,6 @@ impl PayloadStorageType {
 
     pub fn is_on_disk(&self) -> bool {
         match self {
-            #[cfg(feature = "rocksdb")]
-            PayloadStorageType::InMemory => false,
-            #[cfg(feature = "rocksdb")]
-            PayloadStorageType::OnDisk => true,
             PayloadStorageType::Mmap => true,
             PayloadStorageType::InRamMmap => false,
         }
@@ -1554,6 +1589,10 @@ pub enum VectorStorageType {
     /// Storage in a single mmap file, not appendable
     /// Pre-fetched into RAM on load
     InRamMmap,
+    /// Placeholder storage: contains no data, all vectors reported as deleted.
+    /// Used for newly created named vectors on immutable segments.
+    /// No files on disk, reconstructed from config on load.
+    Empty,
 }
 
 #[cfg(any(test, feature = "testing"))]
@@ -1566,7 +1605,7 @@ impl Default for VectorStorageType {
 
 /// Storage types for vectors
 #[derive(
-    Default, Debug, Deserialize, Serialize, JsonSchema, Anonymize, Eq, PartialEq, Copy, Clone,
+    Default, Debug, Deserialize, Serialize, JsonSchema, Anonymize, Eq, PartialEq, Copy, Clone, Hash,
 )]
 #[serde(rename_all = "snake_case")]
 pub enum VectorStorageDatatype {
@@ -1629,7 +1668,17 @@ impl VectorStorageType {
         match self {
             Self::Memory | Self::InRamChunkedMmap | Self::InRamMmap => false,
             Self::Mmap | Self::ChunkedMmap => true,
+            // Empty storage has no actual data; report based on what the
+            // runtime EmptyDenseVectorStorage was configured with.
+            // This fallback returns true to be safe, but callers that need
+            // the real on-disk status should check the storage instance.
+            Self::Empty => true,
         }
+    }
+
+    /// Whether this is a placeholder empty storage type
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
     }
 }
 
@@ -1670,6 +1719,7 @@ impl VectorDataConfig {
             VectorStorageType::ChunkedMmap => true,
             VectorStorageType::InRamChunkedMmap => true,
             VectorStorageType::InRamMmap => false,
+            VectorStorageType::Empty => false,
         };
         is_index_appendable && is_storage_appendable
     }
@@ -1733,12 +1783,12 @@ impl VectorDataConfig {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum SparseVectorStorageType {
-    /// Storage on disk (rocksdb storage)
-    #[cfg(feature = "rocksdb")]
-    OnDisk,
     /// Storage in memory maps (gridstore storage)
     #[default]
     Mmap,
+    /// Placeholder storage: contains no data, all vectors reported as deleted.
+    /// Used for newly created sparse named vectors on immutable segments.
+    Empty,
 }
 
 impl SparseVectorStorageType {
@@ -1747,9 +1797,7 @@ impl SparseVectorStorageType {
         match self {
             // Both options are on disk, but we keep it explicit for the case if someone adds a new
             // storage type in the future
-            #[cfg(feature = "rocksdb")]
-            Self::OnDisk => true,
-            Self::Mmap => true,
+            Self::Mmap | Self::Empty => true,
         }
     }
 }
@@ -1775,14 +1823,7 @@ pub struct SparseVectorDataConfig {
 
 /// If the storage type is not in config, it means it is the OnDisk variant
 fn default_sparse_vector_storage_type_when_not_in_config() -> SparseVectorStorageType {
-    #[cfg(feature = "rocksdb")]
-    {
-        SparseVectorStorageType::OnDisk
-    }
-    #[cfg(not(feature = "rocksdb"))]
-    {
-        SparseVectorStorageType::default()
-    }
+    SparseVectorStorageType::default()
 }
 
 impl SparseVectorDataConfig {
@@ -2473,12 +2514,12 @@ impl Hash for AnyVariants {
         mem::discriminant(self).hash(state);
         match self {
             AnyVariants::Strings(index_set) => {
-                for item in index_set.iter() {
+                for item in index_set {
                     item.hash(state);
                 }
             }
             AnyVariants::Integers(index_set) => {
-                for item in index_set.iter() {
+                for item in index_set {
                     item.hash(state);
                 }
             }
@@ -2564,6 +2605,7 @@ pub struct MatchExcept {
 pub struct FuzzyParams {
     /// Max Levenshtein edit distance (0..=2).
     #[serde(default = "FuzzyParams::default_max_edits_distance")]
+    #[schemars(range(min = 0, max = 2))]
     pub max_edits: u8,
     /// Number of initial characters that must match exactly. Default: 0.
     #[serde(default = "FuzzyParams::default_prefix_length")]
@@ -2654,7 +2696,7 @@ impl WildcardParams {
     }
 
     pub fn validate_pattern(pattern: &str) -> bool {
-        !pattern.is_empty() && pattern.len() <= Self::MAX_PATTERN_LENGTH
+        !pattern.is_empty() && pattern.chars().count() <= Self::MAX_PATTERN_LENGTH
     }
 }
 
@@ -2926,7 +2968,7 @@ impl<'de> serde::Deserialize<'de> for RangeInterface {
             let keys = ["lt", "gt", "lte", "gte"];
             let has_string_bound = keys
                 .iter()
-                .any(|k| obj.get(*k).map(|v| v.is_string()).unwrap_or(false));
+                .any(|k| obj.get(*k).is_some_and(|v| v.is_string()));
 
             if has_string_bound {
                 return serde_json::from_value::<Range<DateTimePayloadType>>(value)
@@ -3124,23 +3166,19 @@ pub struct GeoPolygon {
 impl GeoPolygon {
     pub fn validate_line_string(line: &GeoLineString) -> OperationResult<()> {
         if line.points.len() <= 3 {
-            return Err(OperationError::ValidationError {
-                description: format!(
-                    "polygon invalid, the size must be at least 4, got {}",
-                    line.points.len()
-                ),
-            });
+            return Err(OperationError::validation_error(format!(
+                "polygon invalid, the size must be at least 4, got {}",
+                line.points.len()
+            )));
         }
 
         if let (Some(first), Some(last)) = (line.points.first(), line.points.last())
             && ((first.lat - last.lat).abs() > f64::EPSILON
                 || (first.lon - last.lon).abs() > f64::EPSILON)
         {
-            return Err(OperationError::ValidationError {
-                description: String::from(
-                    "polygon invalid, the first and the last points should be the same to form a closed line",
-                ),
-            });
+            return Err(OperationError::validation_error(
+                "polygon invalid, the first and the last points should be the same to form a closed line",
+            ));
         }
 
         Ok(())
@@ -4272,6 +4310,7 @@ pub(crate) mod test_utils {
 mod tests {
     use itertools::Itertools;
     use rstest::rstest;
+    use schemars::schema_for;
     use serde::de::DeserializeOwned;
     use serde_json;
 
@@ -4343,6 +4382,22 @@ mod tests {
         assert!(err.contains("RFC3339"), "err was: {err}");
         assert!(err.contains("2014-01-01T00:00:00BAD"), "err was: {err}");
         assert!(err.contains("Example"), "err was: {err}");
+    }
+
+    #[test]
+    fn test_fuzzy_params_schema_limits_max_edits() {
+        let schema = schema_for!(FuzzyParams);
+        let max_edits = schema
+            .schema
+            .object
+            .as_ref()
+            .and_then(|object| object.properties.get("max_edits"))
+            .cloned()
+            .expect("max_edits property must exist")
+            .into_object();
+
+        assert_eq!(max_edits.number.as_ref().and_then(|number| number.minimum), Some(0.0));
+        assert_eq!(max_edits.number.as_ref().and_then(|number| number.maximum), Some(2.0));
     }
 
     /// Regression test: DateTimePayloadType binary serialization roundtrip.

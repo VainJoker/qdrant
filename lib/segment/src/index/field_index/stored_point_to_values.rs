@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use common::counter::conditioned_counter::ConditionedCounter;
 use common::ext::ResultOptionExt;
-use common::fs::clear_disk_cache;
 use common::generic_consts::Random;
 use common::mmap::{AdviceSetting, create_and_ensure_length, open_write_mmap};
 use common::types::PointOffsetType;
@@ -182,11 +181,8 @@ where
             length: std::mem::size_of::<Header>() as u64,
         })?;
 
-        let (header, _) = Header::read_from_prefix(&header_bytes).map_err(|_| {
-            OperationError::InconsistentStorage {
-                description: NOT_ENOUGH_BYTES_ERROR_MESSAGE.to_owned(),
-            }
-        })?;
+        let (header, _) = Header::read_from_prefix(&header_bytes)
+            .map_err(|_| OperationError::inconsistent_storage(NOT_ENOUGH_BYTES_ERROR_MESSAGE))?;
 
         Ok(Self {
             file_name,
@@ -309,7 +305,13 @@ where
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        clear_disk_cache(&self.file_name)?;
+        let Self {
+            file_name: _,
+            store,
+            header: _,
+            phantom: _,
+        } = self;
+        store.clear_ram_cache().map_err(OperationError::from)?;
         Ok(())
     }
 

@@ -193,6 +193,21 @@ impl MutableNullIndex {
     pub fn populate(&self) -> OperationResult<()> {
         Ok(())
     }
+    /// Approximate RAM usage in bytes.
+    pub fn ram_usage_bytes(&self) -> usize {
+        let Self {
+            base_dir: _,
+            storage,
+            total_point_count: _,
+        } = self;
+        let Storage {
+            has_values_flags,
+            is_null_flags,
+        } = storage;
+        has_values_flags.get_bitmap().serialized_size()
+            + is_null_flags.get_bitmap().serialized_size()
+    }
+
     pub fn is_on_disk(&self) -> bool {
         false
     }
@@ -254,7 +269,7 @@ impl PayloadFieldIndex for MutableNullIndex {
         &'a self,
         condition: &'a FieldCondition,
         _hw_counter: &'a HardwareCounterCell,
-    ) -> OperationResult<Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>>> {
+    ) -> Option<Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a>> {
         let FieldCondition {
             key: _,
             r#match: _,
@@ -267,29 +282,27 @@ impl PayloadFieldIndex for MutableNullIndex {
             is_null,
         } = condition;
 
-        Ok(if let Some(is_empty) = is_empty {
+        if let Some(is_empty) = is_empty {
             if *is_empty {
                 // Return points that don't have values
-                let iter = self.storage.has_values_flags.iter_falses();
-                Some(Box::new(iter))
+                Some(Box::new(
+                    self.storage.has_values_flags.iter_falses().map(Ok),
+                ))
             } else {
                 // Return points that have values
-                let iter = self.storage.has_values_flags.iter_trues();
-                Some(Box::new(iter))
+                Some(Box::new(self.storage.has_values_flags.iter_trues().map(Ok)))
             }
         } else if let Some(is_null) = is_null {
             if *is_null {
                 // Return points that have null values
-                let iter = self.storage.is_null_flags.iter_trues();
-                Some(Box::new(iter))
+                Some(Box::new(self.storage.is_null_flags.iter_trues().map(Ok)))
             } else {
                 // Return points that don't have null values
-                let iter = self.storage.is_null_flags.iter_falses();
-                Some(Box::new(iter))
+                Some(Box::new(self.storage.is_null_flags.iter_falses().map(Ok)))
             }
         } else {
             None
-        })
+        }
     }
 
     fn estimate_cardinality(
@@ -449,12 +462,12 @@ mod tests {
         let is_null_values: Vec<_> = null_index
             .filter(&filter_is_null, &hw_counter)
             .unwrap()
-            .unwrap()
+            .map(|r| r.unwrap())
             .collect();
         let not_empty_values: Vec<_> = null_index
             .filter(&filter_is_not_empty, &hw_counter)
             .unwrap()
-            .unwrap()
+            .map(|r| r.unwrap())
             .collect();
 
         let is_empty_values: Vec<_> = (0..n)

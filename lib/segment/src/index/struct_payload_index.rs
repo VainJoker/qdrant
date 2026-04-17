@@ -12,11 +12,10 @@ use common::either_variant::EitherVariant;
 use common::iterator_ext::IteratorExt;
 use common::types::PointOffsetType;
 use fs_err as fs;
+use itertools::Itertools;
 use schemars::_serde_json::Value;
 
 use super::field_index::facet_index::FacetIndexEnum;
-#[cfg(feature = "rocksdb")]
-use super::field_index::index_selector::IndexSelectorRocksDb;
 use super::field_index::index_selector::{
     IndexSelector, IndexSelectorGridstore, IndexSelectorMmap,
 };
@@ -48,34 +47,8 @@ use crate::vector_storage::{VectorStorage, VectorStorageEnum};
 #[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 enum StorageType {
-    #[cfg(feature = "rocksdb")]
-    RocksDbAppendable(std::sync::Arc<parking_lot::RwLock<rocksdb::DB>>),
     GridstoreAppendable,
-    #[cfg(feature = "rocksdb")]
-    RocksDbNonAppendable(Arc<parking_lot::RwLock<rocksdb::DB>>),
     GridstoreNonAppendable,
-}
-
-impl StorageType {
-    #[cfg(feature = "rocksdb")]
-    pub fn is_appendable(&self) -> bool {
-        match self {
-            StorageType::RocksDbAppendable(_) => true,
-            StorageType::GridstoreAppendable => true,
-            StorageType::RocksDbNonAppendable(_) => false,
-            StorageType::GridstoreNonAppendable => false,
-        }
-    }
-
-    #[cfg(feature = "rocksdb")]
-    pub fn is_rocksdb(&self) -> bool {
-        match self {
-            StorageType::RocksDbAppendable(_) => true,
-            StorageType::RocksDbNonAppendable(_) => true,
-            StorageType::GridstoreAppendable => false,
-            StorageType::GridstoreNonAppendable => false,
-        }
-    }
 }
 
 /// `PayloadIndex` implementation, which actually uses index structures for providing faster search
@@ -96,9 +69,6 @@ pub struct StructPayloadIndex {
     visited_pool: VisitedPool,
     /// Desired storage type for payload indices, used in builder to pick correct type
     storage_type: StorageType,
-    /// RocksDB instance, if any index is using it
-    #[cfg(feature = "rocksdb")]
-    db: Option<Arc<parking_lot::RwLock<rocksdb::DB>>>,
 }
 
 impl StructPayloadIndex {
@@ -131,24 +101,19 @@ impl StructPayloadIndex {
         &'a self,
         condition: &'a PrimaryCondition,
         hw_counter: &'a HardwareCounterCell,
-    ) -> OperationResult<Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>>> {
+    ) -> Option<Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a>> {
         match condition {
             PrimaryCondition::Condition(field_condition) => {
                 let field_key = &field_condition.key;
-                let Some(field_indexes) = self.field_indexes.get(field_key) else {
-                    return Ok(None);
-                };
+                let field_indexes = self.field_indexes.get(field_key)?;
                 field_indexes
                     .iter()
-                    .find_map(|field_index| {
-                        field_index.filter(field_condition, hw_counter).transpose()
-                    })
-                    .transpose()
+                    .find_map(|field_index| field_index.filter(field_condition, hw_counter))
             }
             PrimaryCondition::Ids(ids) => {
-                Ok(Some(Box::new(ids.resolved_point_offsets.iter().copied())))
+                Some(Box::new(ids.resolved_point_offsets.iter().copied().map(Ok)))
             }
-            PrimaryCondition::HasVector(_) => Ok(None),
+            PrimaryCondition::HasVector(_) => None,
         }
     }
 
@@ -187,9 +152,8 @@ impl StructPayloadIndex {
         Ok(())
     }
 
-    #[cfg_attr(not(feature = "rocksdb"), allow(clippy::needless_pass_by_ref_mut))]
     fn load_from_db(
-        &mut self,
+        &self,
         field: PayloadKeyTypeRef,
         // TODO: refactor this and remove the &mut reference.
         payload_schema: &mut PayloadFieldSchemaWithIndexType,
@@ -261,40 +225,7 @@ impl StructPayloadIndex {
                 .collect::<OperationResult<Vec<_>>>()?
         };
 
-        // Actively migrate away from RocksDB indices
-        // Naively implemented by just rebuilding the indices from scratch
-        #[cfg(feature = "rocksdb")]
-        if common::flags::feature_flags().migrate_rocksdb_payload_indices
-            && indexes.iter().any(|index| index.is_rocksdb())
-        {
-            log::info!("Migrating away from RocksDB indices for field `{field}`");
-
-            rebuild = true;
-            is_dirty = true;
-
-            // Change storage type, set skip RocksDB flag and persist
-            // Needed to not use RocksDB when rebuilding indices below
-            match self.storage_type {
-                StorageType::RocksDbAppendable(_) => {
-                    self.storage_type = StorageType::GridstoreAppendable;
-                }
-                StorageType::GridstoreAppendable => {}
-                StorageType::RocksDbNonAppendable(_) => {
-                    self.storage_type = StorageType::GridstoreNonAppendable;
-                }
-                StorageType::GridstoreNonAppendable => {}
-            }
-            self.config.skip_rocksdb.replace(true);
-
-            // Wipe all existing indices
-            for index in indexes.drain(..) {
-                index.wipe().map_err(|err| {
-                    OperationError::service_error(format!(
-                        "Failed to delete existing payload index for field `{field}` before rebuild: {err}"
-                    ))
-                })?;
-            }
-        }
+        // TODO(rocksdb): review leftover code in this function
 
         // If index is not properly loaded or when migrating, rebuild indices
         if rebuild {
@@ -326,78 +257,14 @@ impl StructPayloadIndex {
         let config = if config_path.exists() {
             PayloadConfig::load(&config_path)?
         } else {
-            #[cfg(feature = "rocksdb")]
-            {
-                let mut new_config = PayloadConfig::default();
-                let skip_rocksdb = if is_appendable {
-                    common::flags::feature_flags().payload_index_skip_mutable_rocksdb
-                } else {
-                    common::flags::feature_flags().payload_index_skip_rocksdb
-                };
-                if skip_rocksdb {
-                    new_config.skip_rocksdb = Some(true);
-                }
-                new_config
-            }
-
-            #[cfg(not(feature = "rocksdb"))]
-            {
-                PayloadConfig::default()
-            }
+            PayloadConfig::default()
         };
 
-        #[cfg(feature = "rocksdb")]
-        let mut db = None;
         let storage_type = if is_appendable {
-            #[cfg(feature = "rocksdb")]
-            {
-                let skip_rocksdb = config.skip_rocksdb.unwrap_or(false);
-                if !skip_rocksdb {
-                    let rocksdb = crate::common::rocksdb_wrapper::open_db_with_existing_cf(path)
-                        .map_err(|err| {
-                            OperationError::service_error(format!("RocksDB open error: {err}"))
-                        })?;
-                    db.replace(rocksdb.clone());
-                    StorageType::RocksDbAppendable(rocksdb)
-                } else {
-                    StorageType::GridstoreAppendable
-                }
-            }
-            #[cfg(not(feature = "rocksdb"))]
-            {
-                StorageType::GridstoreAppendable
-            }
+            StorageType::GridstoreAppendable
         } else {
-            #[cfg(feature = "rocksdb")]
-            {
-                let skip_rocksdb = config.skip_rocksdb.unwrap_or(false);
-                if !skip_rocksdb {
-                    let rocksdb = crate::common::rocksdb_wrapper::open_db_with_existing_cf(path)
-                        .map_err(|err| {
-                            OperationError::service_error(format!("RocksDB open error: {err}"))
-                        })?;
-                    db.replace(rocksdb.clone());
-                    StorageType::RocksDbNonAppendable(rocksdb)
-                } else {
-                    StorageType::GridstoreNonAppendable
-                }
-            }
-            #[cfg(not(feature = "rocksdb"))]
-            {
-                StorageType::GridstoreNonAppendable
-            }
+            StorageType::GridstoreNonAppendable
         };
-
-        // Also prematurely open RocksDB if any index is still using it
-        #[cfg(feature = "rocksdb")]
-        if db.is_none() && config.indices.any_is_rocksdb() {
-            log::debug!("Opening RocksDB to load old payload index");
-            let rocksdb =
-                crate::common::rocksdb_wrapper::open_db_with_existing_cf(path).map_err(|err| {
-                    OperationError::service_error(format!("RocksDB open error: {err}"))
-                })?;
-            db.replace(rocksdb);
-        }
 
         let mut index = StructPayloadIndex {
             payload,
@@ -408,8 +275,6 @@ impl StructPayloadIndex {
             path: path.to_owned(),
             visited_pool: Default::default(),
             storage_type,
-            #[cfg(feature = "rocksdb")]
-            db,
         };
 
         if !index.config_path().exists() {
@@ -419,45 +284,29 @@ impl StructPayloadIndex {
 
         index.load_all_fields(create)?;
 
-        // If we have a RocksDB instance, but no index using it, completely delete it here
-        #[cfg(feature = "rocksdb")]
-        if !index.storage_type.is_rocksdb()
-            && !index.config.indices.any_is_rocksdb()
-            && let Some(db) = index.db.take()
-        {
-            match Arc::try_unwrap(db) {
-                Ok(db) => {
-                    log::trace!(
-                        "Deleting RocksDB for payload indices, no payload index uses it anymore"
-                    );
-
-                    // Close RocksDB instance
-                    let db = db.into_inner();
-                    drop(db);
-
-                    // Destroy all RocksDB files
-                    let options = crate::common::rocksdb_wrapper::make_db_options();
-                    match rocksdb::DB::destroy(&options, &index.path) {
-                        Ok(_) => log::debug!("Deleted RocksDB for payload indices"),
-                        Err(err) => {
-                            log::warn!("Failed to delete RocksDB for payload indices: {err}")
-                        }
-                    }
-                }
-                // Here we don't have exclusive ownership of RocksDB, which prevents us from
-                // controlling and closing the instance. Because of it, we cannot destroy the
-                // RocksDB files, and leave them behind. We don't consider this a problem, because
-                // a future optimization run will get rid of these files.
-                Err(db) => {
-                    log::warn!(
-                        "RocksDB for payload indices could not be deleted, does not have exclusive ownership"
-                    );
-                    index.db.replace(db);
-                }
-            }
-        }
-
         Ok(index)
+    }
+
+    /// Register a vector storage for the `has_vector` filtering condition.
+    ///
+    /// Must be called whenever a new named vector is added to the segment after the
+    /// payload index has been opened, otherwise `has_vector` queries will see stale
+    /// state (no matches for the new vector) until the segment is reloaded.
+    pub fn register_vector_storage(
+        &mut self,
+        vector_name: VectorNameBuf,
+        vector_storage: Arc<AtomicRefCell<VectorStorageEnum>>,
+    ) {
+        self.vector_storages.insert(vector_name, vector_storage);
+    }
+
+    /// Drop a vector storage from the `has_vector` lookup map.
+    ///
+    /// Must be called whenever a named vector is removed from the segment, otherwise
+    /// `has_vector` queries will keep matching points against the deleted storage
+    /// until the segment is reloaded.
+    pub fn unregister_vector_storage(&mut self, vector_name: &str) {
+        self.vector_storages.remove(vector_name);
     }
 
     pub fn build_field_indexes(
@@ -598,14 +447,6 @@ impl StructPayloadIndex {
             .collect()
     }
 
-    #[cfg(feature = "rocksdb")]
-    pub fn restore_database_snapshot(
-        snapshot_path: &Path,
-        segment_path: &Path,
-    ) -> OperationResult<()> {
-        crate::rocksdb_backup::restore(snapshot_path, &segment_path.join("payload_index"))
-    }
-
     fn clear_index_for_point(&mut self, point_id: PointOffsetType) -> OperationResult<()> {
         for (_, field_indexes) in self.field_indexes.iter_mut() {
             for index in field_indexes {
@@ -637,7 +478,7 @@ impl StructPayloadIndex {
         hw_counter: &'a HardwareCounterCell,
         is_stopped: &'a AtomicBool,
         deferred_internal_id: Option<PointOffsetType>,
-    ) -> OperationResult<impl Iterator<Item = PointOffsetType> + 'a> {
+    ) -> OperationResult<impl Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
         if query_cardinality.primary_clauses.is_empty() {
             let full_scan_iterator = point_mappings.iter_internal_visible(deferred_internal_id);
 
@@ -645,7 +486,8 @@ impl StructPayloadIndex {
             // Worst case: query expected to return few matches, but index can't be used
             let matched_points = full_scan_iterator
                 .stop_if(is_stopped)
-                .filter(move |i| struct_filtered_context.check(*i));
+                .filter(move |i| struct_filtered_context.check(*i))
+                .map(Ok);
 
             Ok(EitherVariant::A(matched_points))
         } else {
@@ -658,7 +500,7 @@ impl StructPayloadIndex {
                 .primary_clauses
                 .iter()
                 .map(|clause| self.query_field(clause, hw_counter))
-                .collect::<OperationResult<_>>()?;
+                .collect();
 
             if let Some(primary_iterators) = primary_clause_iterators {
                 let all_conditions_are_primary = filter
@@ -670,7 +512,7 @@ impl StructPayloadIndex {
                     // Filter out deferred points.
                     // This iterator (and each primary iterator too) can yield items in non sorted order, depending on the type of index and primary condition.
                     .flatten()
-                    .filter(move |&internal_id| {
+                    .filter_ok(move |&internal_id| {
                         internal_id < deferred_internal_id.unwrap_or(PointOffsetType::MAX)
                     })
                     .stop_if(is_stopped);
@@ -679,13 +521,13 @@ impl StructPayloadIndex {
                     // All conditions are primary clauses,
                     // We can avoid post-filtering
                     let iter = joined_primary_iterator
-                        .filter(move |&id| !visited_list.check_and_update_visited(id));
+                        .filter_ok(move |&id| !visited_list.check_and_update_visited(id));
                     EitherVariant::B(iter)
                 } else {
                     // Some conditions are primary clauses, some are not
                     let struct_filtered_context =
                         self.struct_filtered_context(filter, hw_counter)?;
-                    let iter = joined_primary_iterator.filter(move |&id| {
+                    let iter = joined_primary_iterator.filter_ok(move |&id| {
                         !visited_list.check_and_update_visited(id)
                             && struct_filtered_context.check(id)
                     });
@@ -706,7 +548,8 @@ impl StructPayloadIndex {
                 })
                 .filter(move |&id| {
                     !visited_list.check_and_update_visited(id) && struct_filtered_context.check(id)
-                });
+                })
+                .map(Ok);
 
             Ok(EitherVariant::D(iter))
         }
@@ -717,28 +560,8 @@ impl StructPayloadIndex {
         let is_on_disk = payload_schema.is_on_disk();
 
         match &self.storage_type {
-            #[cfg(feature = "rocksdb")]
-            StorageType::RocksDbAppendable(db) => IndexSelector::RocksDb(IndexSelectorRocksDb {
-                db,
-                is_appendable: true,
-            }),
             StorageType::GridstoreAppendable => {
                 IndexSelector::Gridstore(IndexSelectorGridstore { dir: &self.path })
-            }
-            #[cfg(feature = "rocksdb")]
-            StorageType::RocksDbNonAppendable(db) => {
-                // legacy logic: we keep rocksdb, but load mmap indexes
-                if !is_on_disk {
-                    return IndexSelector::RocksDb(IndexSelectorRocksDb {
-                        db,
-                        is_appendable: false,
-                    });
-                }
-
-                IndexSelector::Mmap(IndexSelectorMmap {
-                    dir: &self.path,
-                    is_on_disk,
-                })
             }
             StorageType::GridstoreNonAppendable => IndexSelector::Mmap(IndexSelectorMmap {
                 dir: &self.path,
@@ -756,35 +579,6 @@ impl StructPayloadIndex {
                 IndexSelector::Gridstore(IndexSelectorGridstore { dir: &self.path })
             }
             payload_config::StorageType::RocksDb => {
-                #[cfg(feature = "rocksdb")]
-                {
-                    let db = match (&self.storage_type, &self.db) {
-                        (
-                            StorageType::RocksDbAppendable(db)
-                            | StorageType::RocksDbNonAppendable(db),
-                            _,
-                        ) => db,
-                        (
-                            StorageType::GridstoreAppendable | StorageType::GridstoreNonAppendable,
-                            Some(db),
-                        ) => db,
-                        (
-                            StorageType::GridstoreAppendable | StorageType::GridstoreNonAppendable,
-                            None,
-                        ) => {
-                            return Err(OperationError::service_error(
-                                "Loading payload index failed: Configured storage type and payload schema mismatch!",
-                            ));
-                        }
-                    };
-
-                    return Ok(IndexSelector::RocksDb(IndexSelectorRocksDb {
-                        db,
-                        is_appendable: self.storage_type.is_appendable(),
-                    }));
-                }
-
-                #[cfg(not(feature = "rocksdb"))]
                 return Err(OperationError::service_error(
                     "Loading payload index failed: Index is RocksDB but RocksDB feature is disabled.",
                 ));
@@ -810,7 +604,7 @@ impl StructPayloadIndex {
     }
 
     pub fn populate(&self) -> OperationResult<()> {
-        for (_, field_indexes) in self.field_indexes.iter() {
+        for field_indexes in self.field_indexes.values() {
             for index in field_indexes {
                 index.populate()?;
             }
@@ -819,7 +613,7 @@ impl StructPayloadIndex {
     }
 
     pub fn clear_cache(&self) -> OperationResult<()> {
-        for (_, field_indexes) in self.field_indexes.iter() {
+        for field_indexes in self.field_indexes.values() {
             for index in field_indexes {
                 index.clear_cache()?;
             }
@@ -828,7 +622,7 @@ impl StructPayloadIndex {
     }
 
     pub fn clear_cache_if_on_disk(&self) -> OperationResult<()> {
-        for (_, field_indexes) in self.field_indexes.iter() {
+        for field_indexes in self.field_indexes.values() {
             for index in field_indexes {
                 if index.is_on_disk() {
                     index.clear_cache()?;
@@ -985,17 +779,16 @@ impl PayloadIndex for StructPayloadIndex {
         let query_cardinality = self.estimate_cardinality(filter, hw_counter)?;
         let id_tracker = self.id_tracker.borrow();
         let point_mappings = id_tracker.point_mappings();
-        Ok(self
-            .iter_filtered_points(
-                filter,
-                &id_tracker,
-                &point_mappings,
-                &query_cardinality,
-                hw_counter,
-                is_stopped,
-                deferred_internal_id,
-            )?
-            .collect())
+        self.iter_filtered_points(
+            filter,
+            &id_tracker,
+            &point_mappings,
+            &query_cardinality,
+            hw_counter,
+            is_stopped,
+            deferred_internal_id,
+        )?
+        .collect()
     }
 
     fn indexed_points(&self, field: PayloadKeyTypeRef) -> usize {
@@ -1149,27 +942,7 @@ impl PayloadIndex for StructPayloadIndex {
 
         Box::new(move || {
             for flusher in flushers {
-                match flusher() {
-                    Ok(_) => {}
-                    Err(OperationError::RocksDbColumnFamilyNotFound { name }) => {
-                        // It is possible, that the index was removed during the flush by user or another thread.
-                        // In this case, non-existing column family is not an error, but an expected behavior.
-
-                        // Still we want to log this event, for potential debugging.
-                        log::warn!(
-                            "Flush: RocksDB cf_handle error: Cannot find column family {name}. Assume index is removed.",
-                        );
-                        debug_assert!(
-                            false,
-                            "Missing column family should not happen during testing",
-                        );
-                    }
-                    Err(err) => {
-                        return Err(OperationError::service_error(format!(
-                            "Failed to flush payload_index: {err}",
-                        )));
-                    }
-                }
+                flusher()?;
             }
             Ok(())
         })

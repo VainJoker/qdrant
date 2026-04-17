@@ -40,6 +40,7 @@ schemars = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+slab = "0.4.12"
 strum = { workspace = true }
 tap = { workspace = true }
 tar = { workspace = true }
@@ -56,7 +57,6 @@ criterion = { workspace = true }
 fs-err = { workspace = true, features = ["debug"] }
 rstest = { workspace = true }
 self_cell = { workspace = true }
-serde_json = { workspace = true }
 tango-bench = "0.7.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -81,4 +81,8 @@ harness = false
 
 [[bench]]
 name = "atomic_stop"
+harness = false
+
+[[bench]]
+name = "universal_io"
 harness = false

@@ -72,12 +72,13 @@ use crate::collection_manager::optimizers::TrackerLog;
 use crate::collection_manager::optimizers::segment_optimizer::plan_optimizations;
 use crate::collection_manager::segments_searcher::SegmentsSearcher;
 use crate::common::file_utils::{move_dir, move_file};
+use crate::common::memory_reporter::CollectionMemoryReport;
 use crate::config::CollectionConfigInternal;
 use crate::operations::OperationWithClockTag;
 use crate::operations::shared_storage_config::SharedStorageConfig;
 use crate::operations::types::{
     CollectionError, CollectionResult, OptimizersStatus, ShardInfoInternal, ShardStatus,
-    ShardUpdateQueueInfo, check_sparse_compatible_with_segment_config,
+    ShardUpdateQueueInfo,
 };
 use crate::optimizers_builder::{OptimizersConfig, build_optimizers, clear_temp_segments};
 use crate::shards::CollectionId;
@@ -406,9 +407,13 @@ impl LocalShard {
             })
             .map(|entry| entry.path());
 
+        // Build desired vector names from collection config for segment reconciliation
+        let desired_vector_names = desired_vector_names_from_config(&collection_config_read.params);
+
         let mut segment_stream = futures::stream::iter(segment_paths)
             .map(|segment_path| {
                 let payload_index_schema = Arc::clone(&payload_index_schema);
+                let desired_vectors = desired_vector_names.clone();
                 let handle = tokio::task::spawn_blocking(move || {
                     let Some((segment_path, uuid)) = normalize_segment_dir(&segment_path)? else {
                         return CollectionResult::Ok(None);
@@ -428,6 +433,10 @@ impl LocalShard {
                         )?;
                     }
 
+                    // Reconcile named vectors: create vectors that exist in collection config
+                    // but are missing from the segment (e.g. after crash between config update and shard update)
+                    segment.update_all_vector_names(&desired_vectors)?;
+
                     CollectionResult::Ok(Some(segment))
                 });
                 AbortOnDropHandle::new(handle)
@@ -445,23 +454,6 @@ impl LocalShard {
             let Some(segment) = result?? else {
                 continue;
             };
-
-            collection_config_read
-                .params
-                .vectors
-                .check_compatible_with_segment_config(&segment.config().vector_data, true)?;
-            collection_config_read
-                .params
-                .sparse_vectors
-                .as_ref()
-                .map(|sparse_vectors| {
-                    check_sparse_compatible_with_segment_config(
-                        sparse_vectors,
-                        &segment.config().sparse_vector_data,
-                        true,
-                    )
-                })
-                .unwrap_or(Ok(()))?;
 
             segment_holder.add_new(segment);
         }
@@ -1099,6 +1091,25 @@ impl LocalShard {
         (ShardStatus::Green, OptimizersStatus::Ok)
     }
 
+    pub async fn memory_report(&self) -> CollectionResult<CollectionMemoryReport> {
+        let segments = self.segments.clone();
+        tokio::task::spawn_blocking(move || {
+            let segments_read = segments.read();
+            let mut reports = Vec::new();
+
+            // Collect from all segments, including those wrapped in proxies.
+            // During optimization, original segments become proxy-wrapped while
+            // a new empty segment is built. We must report from both.
+            for (_id, locked_segment) in segments_read.iter() {
+                collect_memory_reports(locked_segment, &mut reports)?;
+            }
+
+            Ok(CollectionMemoryReport::merge_all(reports))
+        })
+        .await
+        .map_err(|e| CollectionError::service_error(format!("Memory report task failed: {e}")))?
+    }
+
     pub async fn local_shard_info(&self) -> ShardInfoInternal {
         let collection_config = self.collection_config.read().await.clone();
 
@@ -1431,4 +1442,72 @@ impl LocalShardClocks {
     fn oldest_clocks_path(shard_path: &Path) -> PathBuf {
         shard::files::oldest_clocks_path(shard_path)
     }
+}
+
+/// Build a list of desired vector names from collection params for segment reconciliation.
+fn desired_vector_names_from_config(
+    params: &crate::config::CollectionParams,
+) -> Vec<(
+    segment::types::VectorNameBuf,
+    segment::data_types::vector_name_config::VectorNameConfig,
+)> {
+    use segment::data_types::vector_name_config::{
+        DenseVectorConfig, SparseVectorConfig, VectorNameConfig,
+    };
+
+    let mut desired = Vec::new();
+
+    for (name, vp) in params.vectors.params_iter() {
+        desired.push((
+            name.to_owned(),
+            VectorNameConfig::dense(DenseVectorConfig {
+                size: vp.size.get() as usize,
+                distance: vp.distance,
+                multivector_config: vp.multivector_config,
+                datatype: vp.datatype.map(segment::types::VectorStorageDatatype::from),
+            }),
+        ));
+    }
+
+    if let Some(sparse) = &params.sparse_vectors {
+        for (name, sp) in sparse {
+            desired.push((
+                name.clone(),
+                VectorNameConfig::sparse(SparseVectorConfig {
+                    modifier: sp.modifier,
+                    datatype: sp
+                        .index
+                        .as_ref()
+                        .and_then(|idx| idx.datatype)
+                        .map(segment::types::VectorStorageDatatype::from),
+                }),
+            ));
+        }
+    }
+    desired
+}
+
+/// Recursively collect memory reports from a `LockedSegment`.
+///
+/// For `Original` segments, collects directly.
+/// For `Proxy` segments, collects from the wrapped segment
+/// (which is the real data holder during optimization).
+fn collect_memory_reports(
+    locked_segment: &LockedSegment,
+    reports: &mut Vec<CollectionMemoryReport>,
+) -> CollectionResult<()> {
+    match locked_segment {
+        LockedSegment::Original(segment) => {
+            let segment_guard = segment.read();
+            let seg_report = segment_guard.memory_report();
+            reports.push(crate::common::memory_reporter::report_from_segment(
+                seg_report,
+            )?);
+        }
+        LockedSegment::Proxy(proxy) => {
+            let proxy_guard = proxy.read();
+            collect_memory_reports(&proxy_guard.wrapped_segment, reports)?;
+        }
+    }
+    Ok(())
 }

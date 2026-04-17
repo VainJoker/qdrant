@@ -7,7 +7,7 @@ use ahash::HashMap;
 use common::counter::conditioned_counter::ConditionedCounter;
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::counter::iterator_hw_measurement::HwMeasurementIteratorExt;
-use common::fs::{atomic_save_json, clear_disk_cache, read_json};
+use common::fs::{atomic_save_json, read_json};
 use common::mmap::create_and_ensure_length;
 use common::mmap_hashmap::{Key, MmapHashMap, READ_ENTRY_OVERHEAD};
 use common::types::PointOffsetType;
@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{IdIter, MapIndexKey};
 use crate::common::Flusher;
-use crate::common::mmap_bitslice_buffered_update_wrapper::MmapBitSliceBufferedUpdateWrapper;
+use crate::common::buffered_update_bitslice::BufferedUpdateBitSlice;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::stored_bitslice::MmapBitSlice;
 use crate::index::field_index::stored_point_to_values::StoredPointToValues;
@@ -38,7 +38,7 @@ pub struct MmapMapIndex<N: MapIndexKey + Key + ?Sized> {
 pub(super) struct Storage<N: MapIndexKey + Key + ?Sized> {
     pub(super) value_to_points: MmapHashMap<N, PointOffsetType>,
     point_to_values: StoredPointToValues<N, MmapFile>,
-    pub(super) deleted: MmapBitSliceBufferedUpdateWrapper,
+    pub(super) deleted: BufferedUpdateBitSlice<MmapFile>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ impl<N: MapIndexKey + Key + ?Sized> MmapMapIndex<N> {
             storage: Storage {
                 value_to_points: hashmap,
                 point_to_values,
-                deleted: MmapBitSliceBufferedUpdateWrapper::new(deleted),
+                deleted: BufferedUpdateBitSlice::new(deleted),
             },
             deleted_count,
             total_key_value_pairs: config.total_key_value_pairs,
@@ -215,7 +215,13 @@ impl<N: MapIndexKey + Key + ?Sized> MmapMapIndex<N> {
     pub fn get_values(
         &self,
         idx: PointOffsetType,
+        hw_counter: &HardwareCounterCell,
     ) -> Option<Box<dyn Iterator<Item = Cow<'_, N>> + '_>> {
+        let hw_counter = self.make_conditioned_counter(hw_counter);
+
+        // We can account cost of reading `bool`, but it will likely be more expensive, than
+        // actually reading bool itself.
+
         self.storage
             .deleted
             .get(idx as usize)
@@ -223,8 +229,7 @@ impl<N: MapIndexKey + Key + ?Sized> MmapMapIndex<N> {
             .and_then(|_| {
                 self.storage
                     .point_to_values
-                    // TODO: Propagate counter upwards
-                    .values_iter(idx, ConditionedCounter::never())
+                    .values_iter(idx, hw_counter)
                     .ok()?
                     .map(|iter| Box::new(iter) as Box<dyn Iterator<Item = Cow<'_, N>>>)
             })
@@ -389,13 +394,21 @@ impl<N: MapIndexKey + Key + ?Sized> MmapMapIndex<N> {
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        let value_to_points_path = self.path.join(HASHMAP_PATH);
-        let deleted_path = self.path.join(DELETED_PATH);
-
-        clear_disk_cache(&value_to_points_path)?;
-        clear_disk_cache(&deleted_path)?;
-
-        self.storage.point_to_values.clear_cache()?;
+        let Self {
+            path: _,
+            storage,
+            deleted_count: _,
+            total_key_value_pairs: _,
+            is_on_disk: _,
+        } = self;
+        let Storage {
+            value_to_points,
+            point_to_values,
+            deleted,
+        } = storage;
+        value_to_points.clear_cache()?;
+        deleted.clear_cache()?;
+        point_to_values.clear_cache()?;
         Ok(())
     }
 }

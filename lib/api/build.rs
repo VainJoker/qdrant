@@ -181,6 +181,7 @@ fn configure_validation(builder: Builder) -> Builder {
             "UpdateCollectionClusterSetupRequest",
             "ProductQuantization",
             "BinaryQuantization",
+            "TurboQuantization",
             "Disabled",
             "QuantizationConfigDiff",
             "quantization_config_diff::Quantization",
@@ -196,6 +197,7 @@ fn configure_validation(builder: Builder) -> Builder {
             ("GetShardRecoveryPointRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("UpdateShardCutoffPointRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("GetShardOptimizationsRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
+            ("GetShardMemoryReportRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
         ], &[])
         // Service: points.proto
         .validates(&[
@@ -227,6 +229,8 @@ fn configure_validation(builder: Builder) -> Builder {
             ("PayloadIndexParams.index_params", ""),
             ("DeleteFieldIndexCollection.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("DeleteFieldIndexCollection.field_name", "length(min = 1)"),
+            ("CreateVectorNameRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
+            ("DeleteVectorNameRequest.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("SearchPoints.collection_name", "length(min = 1, max = 255), custom(function = \"common::validation::validate_collection_name_legacy\")"),
             ("SearchPoints.filter", ""),
             ("SearchPoints.limit", "range(min = 1)"),
@@ -368,6 +372,8 @@ fn configure_validation(builder: Builder) -> Builder {
             ("ClearPayloadPointsInternal.clear_payload_points", ""),
             ("CreateFieldIndexCollectionInternal.create_field_index_collection", ""),
             ("DeleteFieldIndexCollectionInternal.delete_field_index_collection", ""),
+            ("CreateVectorNameInternal.create_vector_name", ""),
+            ("DeleteVectorNameInternal.delete_vector_name", ""),
             ("UpdateOperation.update", ""),
             ("UpdateBatchInternal.operations", ""),
             ("SearchPointsInternal.search_points", ""),

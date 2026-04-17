@@ -197,11 +197,12 @@ impl<T: PrimitiveVectorElement, S: UniversalRead<T>> ImmutableDenseVectors<T, S>
             length: self.dim as _,
         });
 
-        self.storage.read_batch::<P>(ranges, |idx, vector| {
-            let point = points.get(idx).copied().expect("point ID tracked");
-            callback(idx, point, vector);
-            Ok(())
-        })?;
+        self.storage
+            .read_batch::<P, _>(ranges.enumerate(), |idx, vector| {
+                let point = points.get(idx).copied().expect("point ID tracked");
+                callback(idx, point, vector);
+                Ok(())
+            })?;
 
         Ok(())
     }
@@ -210,6 +211,19 @@ impl<T: PrimitiveVectorElement, S: UniversalRead<T>> ImmutableDenseVectors<T, S>
         if let Err(err) = self.storage.populate() {
             log::error!("Failed to populate vector storage: {err}");
         }
+    }
+
+    pub fn clear_cache(&self) -> OperationResult<()> {
+        let Self {
+            dim: _,
+            num_vectors: _,
+            storage,
+            deleted,
+            deleted_count: _,
+        } = self;
+        storage.clear_ram_cache()?;
+        deleted.clear_cache()?;
+        Ok(())
     }
 }
 

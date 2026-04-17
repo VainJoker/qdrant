@@ -41,6 +41,11 @@ impl TokenSet {
         &self.0
     }
 
+    /// Heap memory usage in bytes.
+    pub fn heap_bytes(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<TokenId>()
+    }
+
     pub fn inner(self) -> Vec<TokenId> {
         self.0
     }
@@ -112,6 +117,11 @@ impl Document {
         &self.0
     }
 
+    /// Heap memory usage in bytes.
+    pub fn heap_bytes(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<TokenId>()
+    }
+
     pub fn to_token_set(&self) -> TokenSet {
         self.0.iter().copied().collect()
     }
@@ -129,6 +139,10 @@ impl Document {
 
         // simple check for tokens in the same order as phrase
         doc.windows(phrase.len()).any(|window| window == phrase)
+    }
+
+    pub fn heap_size(&self) -> usize {
+        self.0.capacity() * std::mem::size_of::<TokenId>()
     }
 }
 
@@ -278,7 +292,7 @@ pub trait InvertedIndex {
         &'a self,
         query: ParsedQuery,
         hw_counter: &'a HardwareCounterCell,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a>;
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a>;
 
     fn get_posting_len(&self, token_id: TokenId, hw_counter: &HardwareCounterCell)
     -> Option<usize>;
@@ -649,7 +663,7 @@ mod tests {
         let imm_mmap = ImmutableInvertedIndex::from(&mmap);
 
         // Check same vocabulary
-        for (token, token_id) in immutable.vocab.iter() {
+        for (token, token_id) in &immutable.vocab {
             assert_eq!(mmap.get_token_id(token, &hw_counter), Some(*token_id));
             assert_eq!(imm_mmap.get_token_id(token, &hw_counter), Some(*token_id));
         }
@@ -811,10 +825,17 @@ mod tests {
                 // In this case both queries would filter to an empty set of documents.
                 continue;
             };
-            let mut_filtered = mut_index.filter(mut_query, hw_counter).collect::<Vec<_>>();
-            let imm_filtered = mmap_index.filter(imm_query, hw_counter).collect::<Vec<_>>();
+            let mut_filtered = mut_index
+                .filter(mut_query, hw_counter)
+                .map(|r| r.unwrap())
+                .collect::<Vec<_>>();
+            let imm_filtered = mmap_index
+                .filter(imm_query, hw_counter)
+                .map(|r| r.unwrap())
+                .collect::<Vec<_>>();
             let imm_mmap_filtered = imm_mmap_index
                 .filter(imm_mmap_query, hw_counter)
+                .map(|r| r.unwrap())
                 .collect::<Vec<_>>();
 
             assert_eq!(mut_filtered, imm_filtered);

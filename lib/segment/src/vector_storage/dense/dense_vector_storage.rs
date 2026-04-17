@@ -6,7 +6,6 @@ use std::sync::atomic::AtomicBool;
 
 use common::bitvec::BitSlice;
 use common::counter::hardware_counter::HardwareCounterCell;
-use common::fs::clear_disk_cache;
 use common::generic_consts::AccessPattern;
 use common::mmap;
 use common::types::PointOffsetType;
@@ -44,6 +43,7 @@ where
     deleted_path: PathBuf,
     vectors: Option<ImmutableDenseVectors<T, S>>,
     distance: Distance,
+    populated: bool,
 }
 
 impl<T, S> DenseVectorStorageImpl<T, S>
@@ -61,8 +61,16 @@ where
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        clear_disk_cache(&self.vectors_path)?;
-        clear_disk_cache(&self.deleted_path)?;
+        let Self {
+            vectors_path: _,
+            deleted_path: _,
+            vectors,
+            distance: _,
+            populated: _,
+        } = self;
+        if let Some(vectors) = vectors {
+            vectors.clear_cache()?;
+        }
         Ok(())
     }
 }
@@ -173,6 +181,7 @@ where
         deleted_path,
         vectors: Some(vectors),
         distance,
+        populated: populate,
     };
 
     Ok(storage)
@@ -225,7 +234,7 @@ where
     }
 
     fn is_on_disk(&self) -> bool {
-        true
+        !self.populated
     }
 
     fn total_vector_count(&self) -> usize {
@@ -504,7 +513,7 @@ mod tests {
             2,
         );
         let res = searcher
-            .peek_top_iter(&mut [0, 1, 2, 3, 4].iter().cloned(), &DEFAULT_STOPPED)
+            .peek_top_iter([0, 1, 2, 3, 4].iter().cloned().map(Ok), &DEFAULT_STOPPED)
             .unwrap()
             .into_iter()
             .exactly_one()
@@ -576,7 +585,7 @@ mod tests {
         );
 
         let closest = searcher
-            .peek_top_iter(&mut [0, 1, 2, 3, 4].iter().cloned(), &DEFAULT_STOPPED)
+            .peek_top_iter([0, 1, 2, 3, 4].iter().cloned().map(Ok), &DEFAULT_STOPPED)
             .unwrap()
             .into_iter()
             .exactly_one()
@@ -605,7 +614,7 @@ mod tests {
             5,
         );
         let closest = searcher
-            .peek_top_iter(&mut [0, 1, 2, 3, 4].iter().cloned(), &DEFAULT_STOPPED)
+            .peek_top_iter([0, 1, 2, 3, 4].iter().cloned().map(Ok), &DEFAULT_STOPPED)
             .unwrap()
             .into_iter()
             .exactly_one()
@@ -694,7 +703,7 @@ mod tests {
             5,
         );
         let closest = searcher
-            .peek_top_iter(&mut [0, 1, 2, 3, 4].iter().cloned(), &DEFAULT_STOPPED)
+            .peek_top_iter([0, 1, 2, 3, 4].iter().cloned().map(Ok), &DEFAULT_STOPPED)
             .unwrap()
             .into_iter()
             .exactly_one()

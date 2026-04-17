@@ -15,9 +15,7 @@ use super::tokenizers::Tokenizer;
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
-use crate::index::field_index::full_text_index::immutable_text_index::{
-    ImmutableFullTextIndex, Storage,
-};
+use crate::index::field_index::full_text_index::immutable_text_index::ImmutableFullTextIndex;
 use crate::index::field_index::{FieldIndexBuilderTrait, ValueIndexer};
 
 pub struct MmapFullTextIndex {
@@ -251,28 +249,84 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
                 )
             })?;
 
-        let enable_fuzzy = config.fuzzy_matching.unwrap_or(false);
-        let fuzzy_index = MmapFuzzyIndex::open(path, populate, enable_fuzzy)
-            .ok()
-            .flatten();
+        let fuzzy_index = match immutable_fuzzy_index.as_ref() {
+            Some(_) => Some(
+                MmapFuzzyIndex::open(path.clone(), populate, true)?.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Failed to open MmapFuzzyIndex that was just created",
+                    )
+                })?,
+            ),
+            None => None,
+        };
 
         let mmap_index = MmapFullTextIndex {
             inverted_index,
             fuzzy_index,
-            tokenizer: tokenizer.clone(),
+            tokenizer,
         };
 
         let text_index = if is_on_disk {
             FullTextIndex::Mmap(Box::new(mmap_index))
         } else {
-            FullTextIndex::Immutable(ImmutableFullTextIndex {
-                inverted_index: immutable,
-                fuzzy_index: immutable_fuzzy_index,
-                tokenizer,
-                storage: Storage::Mmap(Box::new(mmap_index)),
-            })
+            FullTextIndex::Immutable(ImmutableFullTextIndex::open_mmap(mmap_index))
         };
 
         Ok(text_index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use common::counter::hardware_counter::HardwareCounterCell;
+    use serde_json::Value;
+
+    use super::FullTextMmapIndexBuilder;
+    use crate::data_types::index::TextIndexParams;
+    use crate::index::field_index::FieldIndexBuilderTrait;
+    use crate::index::field_index::full_text_index::text_index::FullTextIndex;
+    use crate::types::FuzzyParams;
+
+    #[test]
+    fn finalize_keeps_fuzzy_index_available() {
+        for is_on_disk in [true, false] {
+            let temp_dir = tempfile::tempdir().unwrap();
+            let config = TextIndexParams {
+                fuzzy_matching: Some(true),
+                ..TextIndexParams::default()
+            };
+            let mut builder = FullTextMmapIndexBuilder::new(
+                temp_dir.path().to_path_buf(),
+                config,
+                is_on_disk,
+            );
+            let payload = Value::String("hello world".to_owned());
+            let hw_counter = HardwareCounterCell::new();
+
+            builder.init().unwrap();
+            builder.add_point(0, &[&payload], &hw_counter).unwrap();
+
+            let index = builder.finalize().unwrap();
+            let fuzzy_index = match &index {
+                FullTextIndex::Mmap(index) => index.get_fuzzy_index(),
+                FullTextIndex::Immutable(index) => index.get_fuzzy_index(),
+                FullTextIndex::Mutable(_) => panic!("unexpected mutable full text index"),
+            }
+            .expect("finalized mmap text index should keep fuzzy index when enabled");
+
+            let results = fuzzy_index.search_levenshtein(
+                "hellp",
+                &FuzzyParams {
+                    max_edits: 1,
+                    prefix_length: 1,
+                    max_expansions: 8,
+                },
+            );
+
+            assert!(
+                results.iter().any(|candidate| candidate.term == "hello"),
+                "expected fuzzy index to return the indexed token for is_on_disk={is_on_disk}"
+            );
+        }
     }
 }

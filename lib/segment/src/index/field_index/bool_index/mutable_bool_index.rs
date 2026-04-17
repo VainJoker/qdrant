@@ -252,6 +252,22 @@ impl MutableBoolIndex {
         .collect()
     }
 
+    /// Approximate RAM usage in bytes.
+    pub fn ram_usage_bytes(&self) -> usize {
+        let Self {
+            base_dir: _,
+            indexed_count: _,
+            trues_count: _,
+            falses_count: _,
+            storage,
+        } = self;
+        let Storage {
+            trues_flags,
+            falses_flags,
+        } = storage;
+        trues_flags.get_bitmap().serialized_size() + falses_flags.get_bitmap().serialized_size()
+    }
+
     pub fn is_on_disk(&self) -> bool {
         false
     }
@@ -376,8 +392,8 @@ impl PayloadFieldIndex for MutableBoolIndex {
         &'a self,
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
-    ) -> OperationResult<Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>>> {
-        Ok(match &condition.r#match {
+    ) -> Option<Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a>> {
+        match &condition.r#match {
             Some(Match::Value(MatchValue {
                 value: ValueVariants::Bool(value),
             })) => {
@@ -389,11 +405,12 @@ impl PayloadFieldIndex for MutableBoolIndex {
                         hw_counter.new_accumulator(),
                         u8::BITS as usize,
                         |i| i.payload_index_io_read_counter(),
-                    );
+                    )
+                    .map(Ok);
                 Some(Box::new(iter))
             }
             _ => None,
-        })
+        }
     }
 
     fn estimate_cardinality(

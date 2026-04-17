@@ -44,6 +44,16 @@ impl MutableFuzzyIndex {
     pub fn get_terms(&self) -> impl Iterator<Item = &str> {
         self.terms.iter().map(|t| t.as_str())
     }
+
+    /// Approximate RAM usage in bytes.
+    pub fn ram_usage_bytes(&self) -> usize {
+        // BTreeSet node overhead approximation: child pointers + parent pointer + metadata.
+        let btree_node_overhead = std::mem::size_of::<usize>() * 3;
+        let entry_bytes = std::mem::size_of::<String>() + btree_node_overhead;
+        let terms_base_bytes = self.terms.len() * entry_bytes;
+        let terms_heap_bytes: usize = self.terms.iter().map(|term| term.capacity()).sum();
+        terms_base_bytes + terms_heap_bytes
+    }
 }
 
 impl Default for MutableFuzzyIndex {
@@ -124,5 +134,26 @@ impl FuzzyIndex for MutableFuzzyIndex {
         }
 
         results
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MutableFuzzyIndex;
+
+    #[test]
+    fn test_ram_usage_bytes_grows_with_unique_terms() {
+        let mut index = MutableFuzzyIndex::new();
+        assert_eq!(index.ram_usage_bytes(), 0);
+
+        index.insert_if_new("abc");
+        let one_term_bytes = index.ram_usage_bytes();
+        assert!(one_term_bytes > 0);
+
+        index.insert_if_new("abc");
+        assert_eq!(index.ram_usage_bytes(), one_term_bytes);
+
+        index.insert_if_new("alphabet");
+        assert!(index.ram_usage_bytes() > one_term_bytes);
     }
 }

@@ -156,6 +156,75 @@ fn movie_titles() -> Vec<String> {
 }
 
 #[test]
+fn test_ram_usage_bytes_includes_fuzzy_index_for_mutable_and_immutable() {
+    let hw_counter = HardwareCounterCell::new();
+    let docs = [
+        "alpha beta gamma".to_string(),
+        "delta epsilon zeta".to_string(),
+        "eta theta iota".to_string(),
+    ];
+
+    let config = |enable_fuzzy| TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        min_token_len: None,
+        max_token_len: None,
+        lowercase: Some(true),
+        phrase_matching: None,
+        fuzzy_matching: Some(enable_fuzzy),
+        stopwords: None,
+        on_disk: None,
+        stemmer: None,
+        ascii_folding: None,
+        enable_hnsw: None,
+    };
+
+    let mutable_ram_usage = |enable_fuzzy| {
+        let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+        let mut index = FullTextIndex::new_gridstore(
+            temp_dir.path().to_path_buf(),
+            config(enable_fuzzy),
+            true,
+        )
+        .unwrap()
+        .unwrap();
+
+        for (point_id, doc) in docs.iter().enumerate() {
+            index
+                .add_many(point_id as PointOffsetType, vec![doc.clone()], &hw_counter)
+                .unwrap();
+        }
+
+        index.ram_usage_bytes()
+    };
+
+    let immutable_ram_usage = |enable_fuzzy| {
+        let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+        let mut builder =
+            FullTextIndex::builder_mmap(temp_dir.path().to_path_buf(), config(enable_fuzzy), false);
+        builder.init().unwrap();
+
+        for (point_id, doc) in docs.iter().enumerate() {
+            builder
+                .add_many(point_id as PointOffsetType, vec![doc.clone()], &hw_counter)
+                .unwrap();
+        }
+
+        let index = builder.finalize().unwrap();
+        assert!(matches!(index, FullTextIndex::Immutable(_)));
+        index.ram_usage_bytes()
+    };
+
+    let mutable_without_fuzzy = mutable_ram_usage(false);
+    let mutable_with_fuzzy = mutable_ram_usage(true);
+    assert!(mutable_with_fuzzy > mutable_without_fuzzy);
+
+    let immutable_without_fuzzy = immutable_ram_usage(false);
+    let immutable_with_fuzzy = immutable_ram_usage(true);
+    assert!(immutable_with_fuzzy > immutable_without_fuzzy);
+}
+
+#[test]
 fn test_prefix_search() {
     let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
     let config = TextIndexParams {
@@ -188,7 +257,10 @@ fn test_prefix_search() {
             .unwrap();
     }
 
-    let res: Vec<_> = index.query("ROBO", &hw_counter).collect();
+    let res: Vec<_> = index
+        .query("ROBO", &hw_counter)
+        .map(|r| r.unwrap())
+        .collect();
 
     let query = index.parse_text_query("ROBO", &hw_counter).unwrap();
 
@@ -198,7 +270,10 @@ fn test_prefix_search() {
 
     assert_eq!(res.len(), 3);
 
-    let res: Vec<_> = index.query("q231", &hw_counter).collect();
+    let res: Vec<_> = index
+        .query("q231", &hw_counter)
+        .map(|r| r.unwrap())
+        .collect();
     assert!(res.is_empty());
 
     assert!(index.parse_text_query("q231", &hw_counter).is_none());
@@ -263,7 +338,10 @@ fn test_phrase_matching() {
         assert!(index.check_match(&text_query, 1));
         assert!(index.check_match(&text_query, 2));
 
-        let text_results: Vec<_> = index.filter_query(text_query, &hw_counter).collect();
+        let text_results: Vec<_> = index
+            .filter_query(text_query, &hw_counter)
+            .map(|r| r.unwrap())
+            .collect();
 
         // Should match documents 0, 1, and 2 (all contain "quick", "brown", "fox")
         assert_eq!(text_results.len(), 3);
@@ -278,7 +356,10 @@ fn test_phrase_matching() {
         assert!(index.check_match(&phrase_query, 0));
         assert!(index.check_match(&phrase_query, 2));
 
-        let phrase_results: Vec<_> = index.filter_query(phrase_query, &hw_counter).collect();
+        let phrase_results: Vec<_> = index
+            .filter_query(phrase_query, &hw_counter)
+            .map(|r| r.unwrap())
+            .collect();
 
         // Should only match documents 0 and 2 (contain "quick brown fox" in that exact order)
         assert_eq!(phrase_results.len(), 2);
@@ -290,7 +371,10 @@ fn test_phrase_matching() {
         let missing_query = index
             .parse_phrase_query("fox brown quick", &hw_counter)
             .unwrap();
-        let missing_results: Vec<_> = index.filter_query(missing_query, &hw_counter).collect();
+        let missing_results: Vec<_> = index
+            .filter_query(missing_query, &hw_counter)
+            .map(|r| r.unwrap())
+            .collect();
 
         // Should match no documents (no document contains this exact phrase)
         assert_eq!(missing_results.len(), 0);
@@ -307,7 +391,10 @@ fn test_phrase_matching() {
         assert!(index.check_match(&phrase_query, 4));
 
         // Should only match document 4
-        let filter_results: Vec<_> = index.filter_query(phrase_query, &hw_counter).collect();
+        let filter_results: Vec<_> = index
+            .filter_query(phrase_query, &hw_counter)
+            .map(|r| r.unwrap())
+            .collect();
         assert_eq!(filter_results.len(), 1);
         assert!(filter_results.contains(&4));
     };
@@ -603,7 +690,7 @@ fn test_fuzzy_search_suite() {
                 panic!("[{name}|{iname}] parse returned None but expected non-empty results");
             };
 
-            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).collect();
+            let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw_counter).filter_map(Result::ok).collect();
 
             for (point_id, _) in DOCS {
                 let via_check = index.check_match(&parsed, *point_id);
@@ -755,7 +842,7 @@ fn test_multi_fuzzy_clause_semantics() {
                 assert_matches_variant(&parsed, expected_variant);
 
                 let actual: HashSet<u32> =
-                    index.filter_query(parsed.clone(), &hw_counter).collect();
+                    index.filter_query(parsed.clone(), &hw_counter).filter_map(Result::ok).collect();
                 let expected: HashSet<u32> = expected_ids.iter().copied().collect();
 
                 assert_eq!(
@@ -964,7 +1051,7 @@ fn test_fuzzy_prefix_length_uses_char_boundaries_for_all_backends() {
             panic!("[{iname}] parse returned None");
         };
 
-        let actual: HashSet<u32> = index.filter_query(parsed, &hw_counter).collect();
+        let actual: HashSet<u32> = index.filter_query(parsed, &hw_counter).filter_map(Result::ok).collect();
 
         assert_eq!(
             actual, expected,
@@ -1034,6 +1121,7 @@ fn test_ascii_folding_in_full_text_index_word() {
 
     let results_enabled: Vec<_> = index_enabled
         .filter_query(query_enabled, &hw_counter)
+        .map(|r| r.unwrap())
         .collect();
     assert!(results_enabled.contains(&0));
 
@@ -1042,6 +1130,7 @@ fn test_ascii_folding_in_full_text_index_word() {
     if let Some(query_disabled) = query_disabled_opt {
         let results_disabled: Vec<_> = index_disabled
             .filter_query(query_disabled, &hw_counter)
+            .map(|r| r.unwrap())
             .collect();
         assert!(!results_disabled.contains(&0));
     }
@@ -1051,6 +1140,7 @@ fn test_ascii_folding_in_full_text_index_word() {
     assert!(index_enabled.check_match(&query_acento, 0));
     let results_acento: Vec<_> = index_enabled
         .filter_query(query_acento, &hw_counter)
+        .map(|r| r.unwrap())
         .collect();
     assert!(results_acento.contains(&0));
 
@@ -1059,6 +1149,7 @@ fn test_ascii_folding_in_full_text_index_word() {
         .unwrap();
     let results_acento2: Vec<_> = index_disabled
         .filter_query(query_acento2, &hw_counter)
+        .map(|r| r.unwrap())
         .collect();
     assert!(results_acento2.contains(&0));
 }

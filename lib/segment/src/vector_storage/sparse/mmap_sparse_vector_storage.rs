@@ -167,8 +167,14 @@ impl MmapSparseVectorStorage {
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        self.deleted.clear_cache()?;
-        self.storage.clear_cache()?;
+        let Self {
+            storage,
+            deleted,
+            deleted_count: _,
+            next_point_offset: _,
+        } = self;
+        deleted.clear_cache()?;
+        storage.clear_cache()?;
         Ok(())
     }
 }
@@ -310,7 +316,7 @@ impl VectorStorage for MmapSparseVectorStorage {
 }
 
 /// Find files related to this sparse vector storage
-#[cfg(any(test, feature = "rocksdb"))]
+#[cfg(test)]
 pub(crate) fn find_storage_files(vector_storage_path: &Path) -> OperationResult<Vec<PathBuf>> {
     let storage_path = vector_storage_path.join(STORAGE_DIRNAME);
     let deleted_path = vector_storage_path.join(DELETED_DIRNAME);

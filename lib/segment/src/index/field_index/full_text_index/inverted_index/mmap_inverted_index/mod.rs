@@ -3,11 +3,10 @@ use std::path::PathBuf;
 
 use common::bitvec::BitVec;
 use common::counter::hardware_counter::HardwareCounterCell;
-use common::fs::clear_disk_cache;
 use common::mmap::{self, AdviceSetting, MmapSlice, create_and_ensure_length};
 use common::mmap_hashmap::{MmapHashMap, READ_ENTRY_OVERHEAD};
 use common::types::PointOffsetType;
-use common::universal_io::OpenOptions;
+use common::universal_io::{MmapFile, OpenOptions};
 use itertools::Either;
 use mmap_postings::{MmapPostingValue, MmapPostings};
 
@@ -20,7 +19,7 @@ use super::postings_iterator::{
 };
 use super::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::Flusher;
-use crate::common::mmap_bitslice_buffered_update_wrapper::MmapBitSliceBufferedUpdateWrapper;
+use crate::common::buffered_update_bitslice::BufferedUpdateBitSlice;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::common::stored_bitslice::MmapBitSlice;
 use crate::index::field_index::full_text_index::inverted_index::Document;
@@ -51,7 +50,7 @@ pub(in crate::index::field_index::full_text_index) struct Storage {
     pub(in crate::index::field_index::full_text_index) vocab: MmapHashMap<str, TokenId>,
     pub(in crate::index::field_index::full_text_index) point_to_tokens_count: MmapSlice<usize>,
     pub(in crate::index::field_index::full_text_index) deleted_points:
-        MmapBitSliceBufferedUpdateWrapper,
+        BufferedUpdateBitSlice<MmapFile>,
 }
 
 impl MmapInvertedIndex {
@@ -154,7 +153,7 @@ impl MmapInvertedIndex {
             },
         )?;
         let num_deleted_points = deleted.count_ones()?;
-        let deleted_points = MmapBitSliceBufferedUpdateWrapper::new(deleted);
+        let deleted_points = BufferedUpdateBitSlice::new(deleted);
         let points_count = point_to_tokens_count.len() - num_deleted_points;
 
         Ok(Some(Self {
@@ -192,7 +191,7 @@ impl MmapInvertedIndex {
     pub fn filter_has_all<'a>(
         &'a self,
         tokens: TokenSet,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
         // in case of mmap immutable index, deleted points are still in the postings
         let filter = move |idx| self.is_active(idx);
 
@@ -200,7 +199,7 @@ impl MmapInvertedIndex {
             postings: &'a MmapPostings<V>,
             tokens: TokenSet,
             filter: impl Fn(u32) -> bool + 'a,
-        ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
             let postings_opt: Option<Vec<_>> = tokens
                 .tokens()
                 .iter()
@@ -217,10 +216,7 @@ impl MmapInvertedIndex {
                 return Box::new(std::iter::empty());
             }
 
-            Box::new(intersect_compressed_postings_iterator(
-                posting_readers,
-                filter,
-            ))
+            Box::new(intersect_compressed_postings_iterator(posting_readers, filter).map(Ok))
         }
 
         match &self.storage.postings {
@@ -486,11 +482,22 @@ impl MmapInvertedIndex {
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
-        let files = self.files();
-        for file in files {
-            clear_disk_cache(&file)?;
-        }
-
+        let Self {
+            path: _,
+            storage,
+            active_points_count: _,
+            is_on_disk: _,
+        } = self;
+        let Storage {
+            postings,
+            vocab,
+            point_to_tokens_count,
+            deleted_points,
+        } = storage;
+        postings.clear_cache();
+        vocab.clear_cache()?;
+        point_to_tokens_count.clear_cache()?;
+        deleted_points.clear_cache()?;
         Ok(())
     }
 }
@@ -547,15 +554,19 @@ impl InvertedIndex for MmapInvertedIndex {
         &'a self,
         query: ParsedQuery,
         _hw_counter: &HardwareCounterCell,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
         match query {
             ParsedQuery::AllTokens(tokens) => self.filter_has_all(tokens),
-            ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase)),
+            ParsedQuery::Phrase(phrase) => Box::new(self.filter_has_phrase(phrase).map(Ok)),
             ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
-                Box::new(self.filter_has_any(tokens))
+                Box::new(self.filter_has_any(tokens).map(Ok))
             }
-            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.filter_fuzzy_all_tokens(fuzzy_doc),
-            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.filter_fuzzy_phrase(fuzzy_doc),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                Box::new(self.filter_fuzzy_all_tokens(fuzzy_doc).map(Ok))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                Box::new(self.filter_fuzzy_phrase(fuzzy_doc).map(Ok))
+            }
         }
     }
 

@@ -282,7 +282,16 @@ fn get_match_text_checker(
 
     let full_text_index = match index {
         FieldIndex::FullTextIndex(idx) => idx,
-        _ => return None,
+        FieldIndex::IntIndex(_)
+        | FieldIndex::DatetimeIndex(_)
+        | FieldIndex::IntMapIndex(_)
+        | FieldIndex::KeywordIndex(_)
+        | FieldIndex::FloatIndex(_)
+        | FieldIndex::GeoIndex(_)
+        | FieldIndex::BoolIndex(_)
+        | FieldIndex::UuidIndex(_)
+        | FieldIndex::UuidMapIndex(_)
+        | FieldIndex::NullIndex(_) => return None,
     };
 
     let parsed = match query_type {

@@ -1777,6 +1777,246 @@
         }
       }
     },
+    "/collections/{collection_name}/vectors/{vector_name}": {
+      "put": {
+        "tags": [
+          "Collections"
+        ],
+        "summary": "Create named vector",
+        "description": "Create a new named vector on an existing collection",
+        "operationId": "create_vector_name",
+        "parameters": [
+          {
+            "name": "collection_name",
+            "in": "path",
+            "description": "Name of the collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vector_name",
+            "in": "path",
+            "description": "Name of the vector to create",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "If true, wait for changes to actually happen",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "ordering",
+            "in": "query",
+            "description": "define ordering guarantees for the operation",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/WriteOrdering"
+            }
+          },
+          {
+            "name": "timeout",
+            "in": "query",
+            "description": "Timeout for the operation",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Vector configuration - dense or sparse",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VectorNameConfig"
+              }
+            }
+          }
+        },
+        "responses": {
+          "default": {
+            "description": "error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "usage": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Usage"
+                        },
+                        {
+                          "nullable": true
+                        }
+                      ]
+                    },
+                    "time": {
+                      "type": "number",
+                      "format": "float",
+                      "description": "Time spent to process this request",
+                      "example": 0.002
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "result": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Collections"
+        ],
+        "summary": "Delete named vector",
+        "description": "Delete a named vector from a collection",
+        "operationId": "delete_vector_name",
+        "parameters": [
+          {
+            "name": "collection_name",
+            "in": "path",
+            "description": "Name of the collection",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vector_name",
+            "in": "path",
+            "description": "Name of the vector to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "description": "If true, wait for changes to actually happen",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "ordering",
+            "in": "query",
+            "description": "define ordering guarantees for the operation",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/WriteOrdering"
+            }
+          },
+          {
+            "name": "timeout",
+            "in": "query",
+            "description": "Timeout for the operation",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        ],
+        "responses": {
+          "default": {
+            "description": "error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "successful operation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "usage": {
+                      "default": null,
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Usage"
+                        },
+                        {
+                          "nullable": true
+                        }
+                      ]
+                    },
+                    "time": {
+                      "type": "number",
+                      "format": "float",
+                      "description": "Time spent to process this request",
+                      "example": 0.002
+                    },
+                    "status": {
+                      "type": "string",
+                      "example": "ok"
+                    },
+                    "result": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/collections/{collection_name}/cluster": {
       "get": {
         "tags": [
@@ -7367,6 +7607,9 @@
           },
           {
             "$ref": "#/components/schemas/BinaryQuantization"
+          },
+          {
+            "$ref": "#/components/schemas/TurboQuantization"
           }
         ]
       },
@@ -7503,6 +7746,49 @@
           "binary",
           "scalar4bits",
           "scalar8bits"
+        ]
+      },
+      "TurboQuantization": {
+        "type": "object",
+        "required": [
+          "turbo"
+        ],
+        "properties": {
+          "turbo": {
+            "$ref": "#/components/schemas/TurboQuantQuantizationConfig"
+          }
+        }
+      },
+      "TurboQuantQuantizationConfig": {
+        "type": "object",
+        "properties": {
+          "always_ram": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "plus": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "bits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TurboQuantBitSize"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          }
+        }
+      },
+      "TurboQuantBitSize": {
+        "type": "string",
+        "enum": [
+          "bits1",
+          "bits1_5",
+          "bits2",
+          "bits4"
         ]
       },
       "Datatype": {
@@ -10913,6 +11199,9 @@
             "$ref": "#/components/schemas/BinaryQuantization"
           },
           {
+            "$ref": "#/components/schemas/TurboQuantization"
+          },
+          {
             "$ref": "#/components/schemas/Disabled"
           }
         ]
@@ -12419,6 +12708,16 @@
             "type": "boolean",
             "nullable": true
           },
+          "audit": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AuditTelemetry"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
           "startup": {
             "type": "string",
             "format": "date-time"
@@ -12464,43 +12763,8 @@
             "default": false,
             "type": "boolean"
           },
-          "payload_index_skip_rocksdb": {
-            "description": "Skip usage of RocksDB in new immutable payload indices.\n\nFirst implemented in Qdrant 1.13.5. Enabled by default in Qdrant 1.14.1.",
-            "default": true,
-            "type": "boolean"
-          },
-          "payload_index_skip_mutable_rocksdb": {
-            "description": "Skip usage of RocksDB in new mutable payload indices.\n\nFirst implemented in Qdrant 1.15.0. Enabled by default in Qdrant 1.16.0.",
-            "default": true,
-            "type": "boolean"
-          },
-          "payload_storage_skip_rocksdb": {
-            "description": "Skip usage of RocksDB in new payload storages.\n\nOn-disk payload storages never use Gridstore.\n\nFirst implemented in Qdrant 1.15.0. Enabled by default in Qdrant 1.16.0.",
-            "default": true,
-            "type": "boolean"
-          },
           "incremental_hnsw_building": {
             "description": "Use incremental HNSW building.\n\nEnabled by default in Qdrant 1.14.1.",
-            "default": true,
-            "type": "boolean"
-          },
-          "migrate_rocksdb_id_tracker": {
-            "description": "Migrate RocksDB based ID trackers into file based ID tracker on start.\n\nEnabled by default in Qdrant 1.15.0.",
-            "default": true,
-            "type": "boolean"
-          },
-          "migrate_rocksdb_vector_storage": {
-            "description": "Migrate RocksDB based vector storages into new format on start.\n\nEnabled by default in Qdrant 1.16.1.",
-            "default": true,
-            "type": "boolean"
-          },
-          "migrate_rocksdb_payload_storage": {
-            "description": "Migrate RocksDB based payload storages into new format on start.\n\nEnabled by default in Qdrant 1.16.1.",
-            "default": true,
-            "type": "boolean"
-          },
-          "migrate_rocksdb_payload_indices": {
-            "description": "Migrate RocksDB based payload indices into new format on start.\n\nRebuilds a new payload index from scratch.\n\nEnabled by default in Qdrant 1.16.1.",
             "default": true,
             "type": "boolean"
           },
@@ -12603,6 +12867,41 @@
         "properties": {
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "AuditTelemetry": {
+        "type": "object",
+        "required": [
+          "dir",
+          "log_api",
+          "max_log_files",
+          "rotation",
+          "trust_forwarded_headers"
+        ],
+        "properties": {
+          "dir": {
+            "type": "string"
+          },
+          "rotation": {
+            "type": "string"
+          },
+          "max_log_files": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "trust_forwarded_headers": {
+            "type": "boolean"
+          },
+          "log_api": {
+            "type": "boolean"
+          },
+          "dir_size_bytes": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0,
+            "nullable": true
           }
         }
       },
@@ -13227,6 +13526,13 @@
             "enum": [
               "InRamMmap"
             ]
+          },
+          {
+            "description": "Placeholder storage: contains no data, all vectors reported as deleted. Used for newly created named vectors on immutable segments. No files on disk, reconstructed from config on load.",
+            "type": "string",
+            "enum": [
+              "Empty"
+            ]
           }
         ]
       },
@@ -13367,17 +13673,17 @@
       "SparseVectorStorageType": {
         "oneOf": [
           {
-            "description": "Storage on disk (rocksdb storage)",
-            "type": "string",
-            "enum": [
-              "on_disk"
-            ]
-          },
-          {
             "description": "Storage in memory maps (gridstore storage)",
             "type": "string",
             "enum": [
               "mmap"
+            ]
+          },
+          {
+            "description": "Placeholder storage: contains no data, all vectors reported as deleted. Used for newly created sparse named vectors on immutable segments.",
+            "type": "string",
+            "enum": [
+              "empty"
             ]
           }
         ]
@@ -13385,34 +13691,6 @@
       "PayloadStorageType": {
         "description": "Type of payload storage",
         "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "in_memory"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "type"
-            ],
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "on_disk"
-                ]
-              }
-            }
-          },
           {
             "type": "object",
             "required": [
@@ -17576,6 +17854,110 @@
           },
           "consensus_thread_status": {
             "$ref": "#/components/schemas/ConsensusThreadStatus"
+          }
+        }
+      },
+      "VectorNameConfig": {
+        "description": "Configuration for creating a new named vector.\n\nContains only the immutable properties that define a vector space. Storage type, index, and quantization are determined automatically based on the segment type and can be configured separately later.\n\nExample JSON for a dense vector: ```json { \"dense\": { \"size\": 768, \"distance\": \"Cosine\" } } ```\n\nExample JSON for a sparse vector: ```json { \"sparse\": { \"modifier\": \"Idf\" } } ```",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/DenseVectorNameConfig"
+          },
+          {
+            "$ref": "#/components/schemas/SparseVectorNameConfig"
+          }
+        ]
+      },
+      "DenseVectorNameConfig": {
+        "description": "Wrapper for dense vector creation config.",
+        "type": "object",
+        "required": [
+          "dense"
+        ],
+        "properties": {
+          "dense": {
+            "$ref": "#/components/schemas/DenseVectorConfig"
+          }
+        }
+      },
+      "DenseVectorConfig": {
+        "description": "Configuration for creating a new dense named vector.\n\nOnly includes properties that define the vector space and cannot be changed after creation. Storage type, index type, and quantization are inferred.",
+        "type": "object",
+        "required": [
+          "distance",
+          "size"
+        ],
+        "properties": {
+          "size": {
+            "description": "Dimensionality of the vectors",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "distance": {
+            "$ref": "#/components/schemas/Distance"
+          },
+          "multivector_config": {
+            "description": "Configuration for multi-vector points (e.g., ColBERT)",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MultiVectorConfig"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "datatype": {
+            "description": "Element storage type (Float32, Float16, Uint8)",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VectorStorageDatatype"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          }
+        }
+      },
+      "SparseVectorNameConfig": {
+        "description": "Wrapper for sparse vector creation config.",
+        "type": "object",
+        "required": [
+          "sparse"
+        ],
+        "properties": {
+          "sparse": {
+            "$ref": "#/components/schemas/SparseVectorConfig"
+          }
+        }
+      },
+      "SparseVectorConfig": {
+        "description": "Configuration for creating a new sparse named vector.\n\nOnly includes properties that define the vector space and cannot be changed after creation.",
+        "type": "object",
+        "properties": {
+          "modifier": {
+            "description": "Value modifier for sparse vectors (e.g., IDF)",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Modifier"
+              },
+              {
+                "nullable": true
+              }
+            ]
+          },
+          "datatype": {
+            "description": "Datatype used to store weights in the index",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VectorStorageDatatype"
+              },
+              {
+                "nullable": true
+              }
+            ]
           }
         }
       }

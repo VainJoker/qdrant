@@ -1,30 +1,20 @@
 use std::borrow::Cow;
 use std::path::PathBuf;
-#[cfg(feature = "rocksdb")]
-use std::sync::Arc;
 
 use ahash::AHashSet;
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
-#[cfg(feature = "rocksdb")]
-use parking_lot::RwLock;
-#[cfg(feature = "rocksdb")]
-use rocksdb::DB;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::fuzzy_index::FuzzyIndex;
-use super::immutable_text_index::ImmutableFullTextIndex;
 use super::inverted_index::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::immutable_text_index::{ImmutableFullTextIndex};
 use super::mmap_text_index::{FullTextMmapIndexBuilder, MmapFullTextIndex};
 use super::mutable_text_index::MutableFullTextIndex;
 use super::tokenizers::Tokenizer;
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
-#[cfg(feature = "rocksdb")]
-use crate::common::rocksdb_buffered_delete_wrapper::DatabaseColumnScheduledDeleteWrapper;
-#[cfg(feature = "rocksdb")]
-use crate::common::rocksdb_wrapper::DatabaseColumnWrapper;
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::{
@@ -38,6 +28,7 @@ use crate::types::{
     MatchWildcard, PayloadKeyType, WildcardParams,
 };
 
+#[allow(clippy::large_enum_variant)]
 pub enum FullTextIndex {
     Mutable(MutableFullTextIndex),
     Immutable(ImmutableFullTextIndex),
@@ -58,28 +49,6 @@ enum Fuzziness {
 }
 
 impl FullTextIndex {
-    #[cfg(feature = "rocksdb")]
-    pub fn new_rocksdb(
-        db: Arc<RwLock<DB>>,
-        config: TextIndexParams,
-        field: &str,
-        is_appendable: bool,
-        create_if_missing: bool,
-    ) -> OperationResult<Option<Self>> {
-        let store_cf_name = Self::storage_cf_name(field);
-        let db_wrapper = DatabaseColumnScheduledDeleteWrapper::new(DatabaseColumnWrapper::new(
-            db,
-            &store_cf_name,
-        ));
-        let index = if is_appendable {
-            MutableFullTextIndex::open_rocksdb(db_wrapper, config, create_if_missing)?
-                .map(Self::Mutable)
-        } else {
-            ImmutableFullTextIndex::open_rocksdb(db_wrapper, config)?.map(Self::Immutable)
-        };
-        Ok(index)
-    }
-
     pub fn new_mmap(
         path: PathBuf,
         config: TextIndexParams,
@@ -123,16 +92,6 @@ impl FullTextIndex {
         }
     }
 
-    #[cfg(feature = "rocksdb")]
-    pub fn builder_rocksdb(
-        db: Arc<RwLock<DB>>,
-        config: TextIndexParams,
-        field: &str,
-        keep_appendable: bool,
-    ) -> OperationResult<FullTextIndexRocksDbBuilder> {
-        FullTextIndexRocksDbBuilder::new(db, config, field, keep_appendable)
-    }
-
     pub fn builder_mmap(
         path: PathBuf,
         config: TextIndexParams,
@@ -146,11 +105,6 @@ impl FullTextIndex {
         config: TextIndexParams,
     ) -> FullTextGridstoreIndexBuilder {
         FullTextGridstoreIndexBuilder::new(dir, config)
-    }
-
-    #[cfg(feature = "rocksdb")]
-    fn storage_cf_name(field: &str) -> String {
-        format!("{field}_fts")
     }
 
     pub(super) fn points_count(&self) -> usize {
@@ -177,7 +131,7 @@ impl FullTextIndex {
         &'a self,
         query: ParsedQuery,
         hw_counter: &'a HardwareCounterCell,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
         match self {
             Self::Mutable(index) => index.inverted_index.filter(query, hw_counter),
             Self::Immutable(index) => index.inverted_index.filter(query, hw_counter),
@@ -246,16 +200,6 @@ impl FullTextIndex {
             Self::Immutable(index) => index.inverted_index.values_is_empty(point_id),
             Self::Mmap(index) => index.inverted_index.values_is_empty(point_id),
         }
-    }
-
-    #[cfg(feature = "rocksdb")]
-    pub(super) fn store_key(id: PointOffsetType) -> Vec<u8> {
-        bincode::serialize(&id).unwrap()
-    }
-
-    #[cfg(feature = "rocksdb")]
-    pub(super) fn restore_key(data: &[u8]) -> PointOffsetType {
-        bincode::deserialize(data).unwrap()
     }
 
     pub(super) fn serialize_document(tokens: Vec<Cow<str>>) -> OperationResult<Vec<u8>> {
@@ -689,7 +633,7 @@ impl FullTextIndex {
         &'a self,
         query: &'a str,
         hw_counter: &'a HardwareCounterCell,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a> {
         let Some(parsed_query) = self.parse_text_query(query, hw_counter) else {
             return Box::new(std::iter::empty());
         };
@@ -722,7 +666,7 @@ impl FullTextIndex {
                 }
                 ParsedQuery::Phrase(query) => {
                     let document = self.parse_document(value, hw_counter);
-                    document.map(|doc| doc.has_phrase(query)).unwrap_or(false)
+                    document.is_some_and(|doc| doc.has_phrase(query))
                 }
                 ParsedQuery::AnyTokens(query) => {
                     let tokenset = self.parse_tokenset(value, hw_counter);
@@ -769,20 +713,20 @@ impl FullTextIndex {
         }
     }
 
+    /// Approximate RAM usage in bytes for in-memory structures.
+    pub fn ram_usage_bytes(&self) -> usize {
+        match self {
+            FullTextIndex::Mutable(index) => index.ram_usage_bytes(),
+            FullTextIndex::Immutable(index) => index.ram_usage_bytes(),
+            FullTextIndex::Mmap(_) => 0,
+        }
+    }
+
     pub fn is_on_disk(&self) -> bool {
         match self {
             FullTextIndex::Mutable(_) => false,
             FullTextIndex::Immutable(_) => false,
             FullTextIndex::Mmap(index) => index.is_on_disk(),
-        }
-    }
-
-    #[cfg(feature = "rocksdb")]
-    pub fn is_rocksdb(&self) -> bool {
-        match self {
-            FullTextIndex::Mutable(index) => index.is_rocksdb(),
-            FullTextIndex::Immutable(index) => index.is_rocksdb(),
-            FullTextIndex::Mmap(_) => false,
         }
     }
 
@@ -827,66 +771,6 @@ impl FullTextIndex {
     }
 }
 
-#[cfg(feature = "rocksdb")]
-pub struct FullTextIndexRocksDbBuilder {
-    mutable_index: MutableFullTextIndex,
-    keep_appendable: bool,
-}
-
-#[cfg(feature = "rocksdb")]
-impl FullTextIndexRocksDbBuilder {
-    pub fn new(
-        db: Arc<RwLock<DB>>,
-        config: TextIndexParams,
-        field: &str,
-        keep_appendable: bool,
-    ) -> OperationResult<Self> {
-        let store_cf_name = FullTextIndex::storage_cf_name(field);
-        let db_wrapper = DatabaseColumnScheduledDeleteWrapper::new(DatabaseColumnWrapper::new(
-            db,
-            &store_cf_name,
-        ));
-        let mutable_index = MutableFullTextIndex::open_rocksdb(db_wrapper, config, true)?
-            .ok_or_else(|| {
-                OperationError::service_error(format!(
-                    "Failed to create and open mutable full text index for field: {field}"
-                ))
-            })?;
-        Ok(FullTextIndexRocksDbBuilder {
-            mutable_index,
-            keep_appendable,
-        })
-    }
-}
-
-#[cfg(feature = "rocksdb")]
-impl FieldIndexBuilderTrait for FullTextIndexRocksDbBuilder {
-    type FieldIndexType = FullTextIndex;
-
-    fn init(&mut self) -> OperationResult<()> {
-        self.mutable_index.init()
-    }
-
-    fn add_point(
-        &mut self,
-        id: PointOffsetType,
-        payload: &[&Value],
-        hw_counter: &HardwareCounterCell,
-    ) -> OperationResult<()> {
-        self.mutable_index.add_point(id, payload, hw_counter)
-    }
-
-    fn finalize(self) -> OperationResult<Self::FieldIndexType> {
-        if self.keep_appendable {
-            return Ok(FullTextIndex::Mutable(self.mutable_index));
-        }
-
-        Ok(FullTextIndex::Immutable(
-            ImmutableFullTextIndex::from_rocksdb_mutable(self.mutable_index),
-        ))
-    }
-}
-
 impl ValueIndexer for FullTextIndex {
     type ValueType = String;
 
@@ -913,13 +797,11 @@ impl ValueIndexer for FullTextIndex {
 
     fn remove_point(&mut self, id: PointOffsetType) -> OperationResult<()> {
         match self {
-            FullTextIndex::Mutable(index) => index.remove_point(id),
+            FullTextIndex::Mutable(index) => index.remove_point(id)?,
             FullTextIndex::Immutable(index) => index.remove_point(id),
-            FullTextIndex::Mmap(index) => {
-                index.remove_point(id);
-                Ok(())
-            }
+            FullTextIndex::Mmap(index) => index.remove_point(id),
         }
+        Ok(())
     }
 }
 
@@ -964,7 +846,7 @@ impl PayloadFieldIndex for FullTextIndex {
         &'a self,
         condition: &'a FieldCondition,
         hw_counter: &'a HardwareCounterCell,
-    ) -> OperationResult<Option<Box<dyn Iterator<Item = PointOffsetType> + 'a>>> {
+    ) -> Option<Box<dyn Iterator<Item = OperationResult<PointOffsetType>> + 'a>> {
         let parsed_query_opt = match &condition.r#match {
             Some(Match::Text(MatchText { text })) => self.parse_text_query(text, hw_counter),
             Some(Match::Phrase(MatchPhrase { phrase })) => {
@@ -975,14 +857,14 @@ impl PayloadFieldIndex for FullTextIndex {
             }
             Some(Match::Fuzzy(fuzzy)) => self.parse_fuzzy_query(fuzzy, hw_counter),
             Some(Match::Wildcard(wildcard)) => self.parse_wildcard_query(wildcard, hw_counter),
-            _ => return Ok(None),
+            _ => return None,
         };
 
         let Some(parsed_query) = parsed_query_opt else {
-            return Ok(Some(Box::new(std::iter::empty())));
+            return Some(Box::new(std::iter::empty()));
         };
 
-        Ok(Some(self.filter_query(parsed_query, hw_counter)))
+        Some(self.filter_query(parsed_query, hw_counter))
     }
 
     fn estimate_cardinality(

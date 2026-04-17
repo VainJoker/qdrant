@@ -13,6 +13,7 @@ mod sharding_keys;
 mod snapshots;
 mod state_management;
 mod telemetry;
+mod vector_name_schema;
 
 use std::collections::HashMap;
 use std::ops::Deref;
@@ -383,9 +384,8 @@ impl Collection {
         let shard_holder_read = self.shards_holder.read().await;
 
         let shard = shard_holder_read.get_shard(shard_id);
-        let replica_set = shard.ok_or_else(|| CollectionError::NotFound {
-            what: format!("Shard {shard_id}"),
-        })?;
+        let replica_set =
+            shard.ok_or_else(|| CollectionError::not_found(format!("Shard {shard_id}")))?;
 
         replica_set.wait_for_local_state(state, timeout).await
     }
@@ -535,9 +535,8 @@ impl Collection {
         let shard_holder_read = self.shards_holder.read().await;
 
         let shard = shard_holder_read.get_shard(shard_id);
-        let replica_set = shard.ok_or_else(|| CollectionError::NotFound {
-            what: format!("Shard {shard_id}"),
-        })?;
+        let replica_set =
+            shard.ok_or_else(|| CollectionError::not_found(format!("Shard {shard_id}")))?;
 
         replica_set.shard_recovery_point().await
     }
@@ -550,9 +549,8 @@ impl Collection {
         let shard_holder_read = self.shards_holder.read().await;
 
         let shard = shard_holder_read.get_shard(shard_id);
-        let replica_set = shard.ok_or_else(|| CollectionError::NotFound {
-            what: format!("Shard {shard_id}"),
-        })?;
+        let replica_set =
+            shard.ok_or_else(|| CollectionError::not_found(format!("Shard {shard_id}")))?;
 
         replica_set.update_shard_cutoff_point(cutoff).await
     }
@@ -565,9 +563,7 @@ impl Collection {
         let shard_holder = self.shards_holder.read().await;
 
         let Some(replica_set) = shard_holder.get_shard(shard_id) else {
-            return Err(CollectionError::NotFound {
-                what: format!("Shard {shard_id}"),
-            });
+            return Err(CollectionError::not_found(format!("Shard {shard_id}")));
         };
 
         replica_set.get_wal_entries(count).await
@@ -584,11 +580,47 @@ impl Collection {
         let shard_holder_read = self.shards_holder.read().await;
 
         let shard = shard_holder_read.get_shard(shard_id);
-        let replica_set = shard.ok_or_else(|| CollectionError::NotFound {
-            what: format!("Shard {shard_id}"),
-        })?;
+        let replica_set =
+            shard.ok_or_else(|| CollectionError::not_found(format!("Shard {shard_id}")))?;
 
         replica_set.local_optimizations(options).await
+    }
+
+    /// Collect memory report across all shards (local + remote).
+    pub async fn memory_report(
+        &self,
+    ) -> CollectionResult<crate::common::memory_reporter::CollectionMemoryReport> {
+        use crate::common::memory_reporter::CollectionMemoryReport;
+
+        let shards_holder = self.shards_holder.read().await;
+        let shards = shards_holder.select_shards(
+            &crate::operations::shard_selector_internal::ShardSelectorInternal::All,
+        )?;
+
+        let mut futures: futures::stream::FuturesUnordered<_> = shards
+            .into_iter()
+            .map(|(shard, _shard_key)| shard.memory_report())
+            .collect();
+
+        let mut reports = Vec::new();
+        while let Some(result) = futures::StreamExt::next(&mut futures).await {
+            reports.push(result?);
+        }
+
+        Ok(CollectionMemoryReport::merge_all(reports))
+    }
+
+    pub async fn local_shard_memory_report(
+        &self,
+        shard_id: ShardId,
+    ) -> CollectionResult<crate::common::memory_reporter::CollectionMemoryReport> {
+        let shard_holder_read = self.shards_holder.read().await;
+
+        let shard = shard_holder_read.get_shard(shard_id);
+        let replica_set =
+            shard.ok_or_else(|| CollectionError::not_found(format!("Shard {shard_id}")))?;
+
+        replica_set.local_memory_report().await
     }
 
     pub async fn state(&self) -> State {

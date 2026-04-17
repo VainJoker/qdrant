@@ -18,6 +18,10 @@ impl ImmutableFuzzyIndex {
     pub fn get_index_as_bytes(&self) -> &[u8] {
         self.index.as_fst().as_bytes()
     }
+
+    pub fn ram_usage_bytes(&self) -> usize {
+        self.index.as_fst().as_bytes().len()
+    }
 }
 
 impl FuzzyIndex for ImmutableFuzzyIndex {

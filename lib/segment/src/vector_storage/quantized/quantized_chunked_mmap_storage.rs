@@ -34,6 +34,11 @@ impl QuantizedChunkedMmapStorage {
     pub fn populate(&self) -> OperationResult<()> {
         self.data.populate()
     }
+
+    pub fn clear_cache(&self) -> OperationResult<()> {
+        let Self { data } = self;
+        data.clear_cache()
+    }
 }
 
 impl quantization::EncodedStorage for QuantizedChunkedMmapStorage {
@@ -77,6 +82,11 @@ impl quantization::EncodedStorage for QuantizedChunkedMmapStorage {
 
     fn immutable_files(&self) -> Vec<PathBuf> {
         ChunkedVectors::immutable_files(&self.data)
+    }
+
+    fn heap_size_bytes(&self) -> usize {
+        let Self { data } = self;
+        data.heap_size_bytes()
     }
 }
 

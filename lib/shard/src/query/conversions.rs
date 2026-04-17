@@ -738,7 +738,7 @@ impl From<rest::Expression> for ExpressionInternal {
                 str_dist: rest::StrDistParamsExpression { field, query, func },
             }) => ExpressionInternal::StrDist { field, query, func: match func {
                 rest::StrDistFunc::Levenshtein => segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::Levenshtein,
-                rest::StrDistFunc::JaroWinkler => segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::JaroWinlker,
+                rest::StrDistFunc::JaroWinkler => segment::index::query_optimization::rescore_formula::parsed_formula::DistKind::JaroWinkler,
             } },
         }
     }
@@ -864,7 +864,7 @@ impl TryFrom<grpc::Expression> for ExpressionInternal {
                 ExpressionInternal::StrDist {
                     field,
                     query,
-                    func: DistKind::JaroWinlker,
+                    func: DistKind::JaroWinkler,
                 }
             }
         };

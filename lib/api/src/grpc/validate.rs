@@ -81,6 +81,7 @@ impl Validate for grpc::quantization_config::Quantization {
             Quantization::Scalar(scalar) => scalar.validate(),
             Quantization::Product(product) => product.validate(),
             Quantization::Binary(binary) => binary.validate(),
+            Quantization::Turboquant(turbo) => turbo.validate(),
         }
     }
 }
@@ -92,6 +93,7 @@ impl Validate for grpc::quantization_config_diff::Quantization {
             Quantization::Scalar(scalar) => scalar.validate(),
             Quantization::Product(product) => product.validate(),
             Quantization::Binary(binary) => binary.validate(),
+            Quantization::Turboquant(turbo) => turbo.validate(),
             Quantization::Disabled(_) => Ok(()),
         }
     }
@@ -232,6 +234,8 @@ impl Validate for grpc::update_operation::Update {
             Update::ClearPayload(op) => op.validate(),
             Update::CreateFieldIndex(op) => op.validate(),
             Update::DeleteFieldIndex(op) => op.validate(),
+            Update::CreateVectorName(op) => op.validate(),
+            Update::DeleteVectorName(op) => op.validate(),
         }
     }
 }

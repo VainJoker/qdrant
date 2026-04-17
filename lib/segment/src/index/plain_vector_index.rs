@@ -89,7 +89,7 @@ impl VectorIndex for PlainVectorIndex {
         params: Option<&SearchParams>,
         query_context: &VectorQueryContext,
     ) -> OperationResult<Vec<Vec<ScoredPointOffset>>> {
-        let is_indexed_only = params.map(|p| p.indexed_only).unwrap_or(false);
+        let is_indexed_only = params.is_some_and(|p| p.indexed_only);
         if is_indexed_only
             && !self.is_small_enough_for_unindexed_search(
                 query_context.search_optimized_threshold_kb(),
@@ -144,7 +144,8 @@ impl VectorIndex for PlainVectorIndex {
                     &is_stopped,
                     deferred_internal_id,
                 )?;
-                batch_searcher.peek_top_iter(filtered_ids_vec.iter().copied(), &is_stopped)?
+                batch_searcher
+                    .peek_top_iter(filtered_ids_vec.iter().copied().map(Ok), &is_stopped)?
             }
             None => batch_searcher.peek_top_all(&is_stopped, deferred_internal_id)?,
         };

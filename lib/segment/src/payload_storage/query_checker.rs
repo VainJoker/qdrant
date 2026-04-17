@@ -275,30 +275,7 @@ impl ConditionChecker for SimpleConditionChecker {
                 if payload_ref_cell.borrow().is_none() {
                     let payload_ptr = match payload_storage_guard.deref() {
                         PayloadStorageEnum::InMemoryPayloadStorage(s) => {
-                            s.payload_ptr(point_id).map(|x| x.into())
-                        }
-                        #[cfg(feature = "rocksdb")]
-                        PayloadStorageEnum::SimplePayloadStorage(s) => {
-                            s.payload_ptr(point_id).map(|x| x.into())
-                        }
-                        #[cfg(feature = "rocksdb")]
-                        PayloadStorageEnum::OnDiskPayloadStorage(s) => {
-                            // Warn: Possible panic here
-                            // Currently, it is possible that `read_payload` fails with Err,
-                            // but it seems like a very rare possibility which might only happen
-                            // if something is wrong with disk or storage is corrupted.
-                            //
-                            // In both cases it means that service can't be of use any longer.
-                            // It is as good as dead. Therefore it is tolerable to just panic here.
-                            // Downside is - API user won't be notified of the failure.
-                            // It will just timeout.
-                            //
-                            // The alternative:
-                            // Rewrite condition checking code to support error reporting.
-                            // Which may lead to slowdown and assumes a lot of changes.
-                            s.read_payload(point_id, &hw_counter)
-                                .unwrap_or_else(|err| panic!("Payload storage is corrupted: {err}"))
-                                .map(|x| x.into())
+                            s.payload_ptr(point_id).map(Into::into)
                         }
                         PayloadStorageEnum::MmapPayloadStorage(s) => {
                             let payload = s.get(point_id, &hw_counter).unwrap_or_else(|err| {
@@ -636,17 +613,17 @@ mod tests {
         assert!(!payload_checker.check(0, &query));
 
         // id Filter
-        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(|x| x.into()).collect();
+        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(u64::into).collect();
 
         let query = Filter::new_must_not(Condition::HasId(ids.into()));
         assert!(!payload_checker.check(2, &query));
 
-        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(|x| x.into()).collect();
+        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(u64::into).collect();
 
         let query = Filter::new_must_not(Condition::HasId(ids.into()));
         assert!(payload_checker.check(10, &query));
 
-        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(|x| x.into()).collect();
+        let ids: AHashSet<_> = vec![1, 2, 3].into_iter().map(u64::into).collect();
 
         let query = Filter::new_must(Condition::HasId(ids.into()));
         assert!(payload_checker.check(2, &query));
