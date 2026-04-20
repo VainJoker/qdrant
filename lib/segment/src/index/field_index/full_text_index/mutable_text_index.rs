@@ -16,6 +16,7 @@ use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::ValueIndexer;
+use crate::index::field_index::full_text_index::fuzzy_index::{FuzzyIndex, MutableFuzzyIndex};
 use crate::index::payload_config::StorageType;
 
 const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
@@ -27,6 +28,7 @@ const GRIDSTORE_OPTIONS: StorageOptions = StorageOptions {
 
 pub struct MutableFullTextIndex {
     pub(super) inverted_index: MutableInvertedIndex,
+    pub(super) fuzzy_index: Option<MutableFuzzyIndex>,
     pub(super) config: TextIndexParams,
     pub(super) storage: Storage,
     pub(super) tokenizer: Tokenizer,
@@ -87,8 +89,17 @@ impl MutableFullTextIndex {
                 ))
             })?;
 
+        let inverted_index = builder.build();
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            Some(MutableFuzzyIndex::build_index(
+                inverted_index.vocab.keys().cloned(),
+            ))
+        } else {
+            None
+        };
         Ok(Some(Self {
-            inverted_index: builder.build(),
+            inverted_index,
+            fuzzy_index,
             config,
             storage: Storage::Gridstore(store),
             tokenizer,
@@ -166,6 +177,14 @@ impl MutableFullTextIndex {
             });
         }
 
+        // Update fuzzy index with new token strings before registering.
+        // Use insert_if_new to avoid String allocation for already-seen tokens.
+        if let Some(fuzzy_index) = &mut self.fuzzy_index {
+            for token in &str_tokens {
+                fuzzy_index.insert_if_new(token.as_ref());
+            }
+        }
+
         let tokens = self.inverted_index.register_tokens(&str_tokens);
 
         let phrase_matching = self.config.phrase_matching.unwrap_or_default();
@@ -234,6 +253,10 @@ impl MutableFullTextIndex {
         }
     }
 
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index.as_ref().map(|f| f as &dyn FuzzyIndex)
+    }
+
     pub fn storage_type(&self) -> StorageType {
         match &self.storage {
             Storage::Gridstore(_) => StorageType::Gridstore,
@@ -267,11 +290,18 @@ impl MutableFullTextIndex {
     pub fn ram_usage_bytes(&self) -> usize {
         let Self {
             inverted_index,
+            fuzzy_index,
             config: _,
             storage: _,
             tokenizer: _,
         } = self;
-        inverted_index.ram_usage_bytes()
+
+        let fuzzy_bytes = fuzzy_index
+            .as_ref()
+            .map(MutableFuzzyIndex::ram_usage_bytes)
+            .unwrap_or(0);
+
+        inverted_index.ram_usage_bytes() + fuzzy_bytes
     }
 }
 

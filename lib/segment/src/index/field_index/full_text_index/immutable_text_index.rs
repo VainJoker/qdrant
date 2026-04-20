@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use common::types::PointOffsetType;
 
+use super::fuzzy_index::{FuzzyIndex, ImmutableFuzzyIndex};
 use super::inverted_index::InvertedIndex;
 use super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 use super::mmap_text_index::MmapFullTextIndex;
@@ -11,6 +12,7 @@ use crate::index::payload_config::StorageType;
 
 pub struct ImmutableFullTextIndex {
     pub(super) inverted_index: ImmutableInvertedIndex,
+    pub(super) fuzzy_index: Option<ImmutableFuzzyIndex>,
     // Backing storage, source of state, persists deletions
     pub(super) storage: Storage,
     cached_ram_usage_bytes: usize,
@@ -25,6 +27,16 @@ impl ImmutableFullTextIndex {
     pub fn open_mmap(index: MmapFullTextIndex) -> OperationResult<Self> {
         let inverted_index = ImmutableInvertedIndex::try_from(&index.inverted_index)?;
 
+        let fuzzy_index = index.fuzzy_index.as_ref().and_then(|fuzzy| {
+            match ImmutableFuzzyIndex::try_from(fuzzy) {
+                Ok(index) => Some(index),
+                Err(err) => {
+                    log::warn!("Failed to load immutable fuzzy index from mmap: {err}");
+                    None
+                }
+            }
+        });
+
         // Index is now loaded into memory, clear cache of backing mmap storage
         if let Err(err) = index.clear_cache() {
             log::warn!("Failed to clear mmap cache of ram mmap full text index: {err}");
@@ -32,10 +44,18 @@ impl ImmutableFullTextIndex {
 
         let mut result = Self {
             inverted_index,
+            fuzzy_index,
             storage: Storage::Mmap(Box::new(index)),
             cached_ram_usage_bytes: 0,
         };
-        result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes();
+
+        let fuzzy_bytes = result
+            .fuzzy_index
+            .as_ref()
+            .map(ImmutableFuzzyIndex::ram_usage_bytes)
+            .unwrap_or(0);
+        result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes() + fuzzy_bytes;
+
         Ok(result)
     }
 
@@ -91,6 +111,10 @@ impl ImmutableFullTextIndex {
                 is_on_disk: index.is_on_disk(),
             },
         }
+    }
+
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index.as_ref().map(|f| f as &dyn FuzzyIndex)
     }
 
     /// Approximate RAM usage in bytes (cached at construction).
