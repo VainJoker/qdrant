@@ -17,7 +17,7 @@ use itertools::Itertools;
 
 use crate::common::operation_error::OperationResult;
 use crate::index::field_index::{CardinalityEstimation, PayloadBlockCondition, PrimaryCondition};
-use crate::index::query_estimator::expected_should_estimation;
+use crate::index::query_estimator::{combine_must_estimations, expected_should_estimation};
 use crate::types::{FieldCondition, Match, PayloadKeyType};
 
 pub type TokenId = u32;
@@ -424,6 +424,50 @@ pub trait InvertedIndex {
     fn vocab_with_postings_len_iter(
         &self,
     ) -> impl Iterator<Item = OperationResult<(&str, usize)>> + '_;
+    // Estimate cardinality for a fuzzy query where every token position must match
+    // at least one token from its corresponding group, regardless of order.
+    fn estimate_has_fuzzy_all_cardinality(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        condition: &FieldCondition,
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<CardinalityEstimation> {
+        if fuzzy_doc.is_empty() {
+            return Ok(CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone()))));
+        }
+
+        let group_estimations = fuzzy_doc
+            .iter()
+            .map(|group| self.estimate_has_any_cardinality(group, condition, hw_counter))
+            .collect::<OperationResult<Vec<_>>>()?;
+
+        Ok(combine_must_estimations(&group_estimations, self.points_count()))
+    }
+
+    // Start with the fuzzy-all estimate, then scale it down using the same
+    // phrase-length heuristic as exact phrase estimation to approximate order constraints.
+    fn estimate_has_fuzzy_phrase_cardinality(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        condition: &FieldCondition,
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<CardinalityEstimation> {
+        if fuzzy_doc.is_empty() {
+            return Ok(CardinalityEstimation::exact(0)
+                .with_primary_clause(PrimaryCondition::Condition(Box::new(condition.clone()))));
+        }
+
+        let fuzzy_all_est =
+            self.estimate_has_fuzzy_all_cardinality(fuzzy_doc, condition, hw_counter)?;
+        let phrase_sq = fuzzy_doc.len() * fuzzy_doc.len();
+        Ok(CardinalityEstimation {
+            primary_clauses: fuzzy_all_est.primary_clauses,
+            min: fuzzy_all_est.min / phrase_sq,
+            exp: fuzzy_all_est.exp / phrase_sq,
+            max: fuzzy_all_est.max / phrase_sq,
+        })
+    }
 
     fn payload_blocks(
         &self,
