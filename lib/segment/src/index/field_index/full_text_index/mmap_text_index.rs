@@ -5,6 +5,7 @@ use common::types::PointOffsetType;
 use fs_err as fs;
 use serde_json::Value;
 
+use super::fuzzy_index::{FuzzyIndex, ImmutableFuzzyIndex, MmapFuzzyIndex};
 use super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 use super::inverted_index::mmap_inverted_index::MmapInvertedIndex;
 use super::inverted_index::mutable_inverted_index::MutableInvertedIndex;
@@ -19,6 +20,7 @@ use crate::index::field_index::{FieldIndexBuilderTrait, ValueIndexer};
 
 pub struct MmapFullTextIndex {
     pub(super) inverted_index: MmapInvertedIndex,
+    pub(super) fuzzy_index: Option<MmapFuzzyIndex>,
     pub(super) tokenizer: Tokenizer,
 }
 
@@ -31,21 +33,40 @@ impl MmapFullTextIndex {
         let populate = !is_on_disk;
 
         let has_positions = config.phrase_matching == Some(true);
+        let enable_fuzzy = config.fuzzy_matching.unwrap_or_default();
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
 
-        let inverted_index = MmapInvertedIndex::open(path, populate, has_positions)?;
-        Ok(inverted_index.map(|inverted_index| Self {
-            inverted_index,
-            tokenizer,
+        let inverted_index = MmapInvertedIndex::open(path.clone(), populate, has_positions)?;
+        Ok(inverted_index.map(|inverted_index| {
+            let fuzzy_index = MmapFuzzyIndex::open(path, populate, enable_fuzzy)
+                .ok()
+                .flatten();
+            Self {
+                inverted_index,
+                fuzzy_index,
+                tokenizer,
+            }
         }))
     }
 
     pub fn files(&self) -> Vec<PathBuf> {
-        self.inverted_index.files()
+        let mut files = self.inverted_index.files();
+        if let Some(fuzzy) = &self.fuzzy_index {
+            files.extend(fuzzy.files());
+        }
+        files
     }
 
     pub fn immutable_files(&self) -> Vec<PathBuf> {
-        self.inverted_index.immutable_files()
+        let mut files = self.inverted_index.immutable_files();
+        if let Some(fuzzy) = &self.fuzzy_index {
+            files.extend(fuzzy.immutable_files());
+        }
+        files
+    }
+
+    pub fn get_fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index.as_ref().map(|f| f as &dyn FuzzyIndex)
     }
 
     fn path(&self) -> &PathBuf {
@@ -80,12 +101,18 @@ impl MmapFullTextIndex {
     /// Block until all pages are populated.
     pub fn populate(&self) -> OperationResult<()> {
         self.inverted_index.populate()?;
+        if let Some(fuzzy) = &self.fuzzy_index {
+            fuzzy.populate();
+        }
         Ok(())
     }
 
     /// Drop disk cache.
     pub fn clear_cache(&self) -> OperationResult<()> {
         self.inverted_index.clear_cache()?;
+        if let Some(fuzzy) = &self.fuzzy_index {
+            fuzzy.clear_cache()?;
+        }
         Ok(())
     }
 }
@@ -93,6 +120,7 @@ impl MmapFullTextIndex {
 pub struct FullTextMmapIndexBuilder {
     path: PathBuf,
     mutable_index: MutableInvertedIndex,
+    enable_fuzzy: bool,
     config: TextIndexParams,
     is_on_disk: bool,
     tokenizer: Tokenizer,
@@ -101,10 +129,12 @@ pub struct FullTextMmapIndexBuilder {
 impl FullTextMmapIndexBuilder {
     pub fn new(path: PathBuf, config: TextIndexParams, is_on_disk: bool) -> Self {
         let with_positions = config.phrase_matching.unwrap_or_default();
+        let enable_fuzzy = config.fuzzy_matching.unwrap_or(false);
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
         Self {
             path,
             mutable_index: MutableInvertedIndex::new(with_positions),
+            enable_fuzzy,
             config,
             is_on_disk,
             tokenizer,
@@ -181,28 +211,58 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
         let Self {
             path,
             mutable_index,
+            enable_fuzzy,
             config,
             is_on_disk,
             tokenizer,
         } = self;
 
-        let immutable = ImmutableInvertedIndex::from(mutable_index);
+        let sorted_vocab_for_fuzzy = if enable_fuzzy {
+            let mut terms: Vec<String> = mutable_index.vocab.keys().cloned().collect();
+            terms.sort_unstable();
+            Some(terms)
+        } else {
+            None
+        };
 
         fs::create_dir_all(path.as_path())?;
+
+        let immutable = ImmutableInvertedIndex::from(mutable_index);
+        let immutable_fuzzy_index = match sorted_vocab_for_fuzzy {
+            Some(terms) => {
+                let immutable_index =
+                    ImmutableFuzzyIndex::build_from_sorted_terms(terms.iter().map(|s| s.as_str()))?;
+                MmapFuzzyIndex::create(path.clone(), &immutable_index)?;
+                Some(immutable_index)
+            }
+            None => None,
+        };
 
         MmapInvertedIndex::create(path.clone(), &immutable)?;
 
         let populate = !is_on_disk;
         let has_positions = config.phrase_matching.unwrap_or_default();
-        let inverted_index =
-            MmapInvertedIndex::open(path, populate, has_positions)?.ok_or_else(|| {
+        let inverted_index = MmapInvertedIndex::open(path.clone(), populate, has_positions)?
+            .ok_or_else(|| {
                 OperationError::service_error(
                     "Failed to open MmapInvertedIndex that was just created",
                 )
             })?;
 
+        let fuzzy_index = match immutable_fuzzy_index.as_ref() {
+            Some(_) => Some(
+                MmapFuzzyIndex::open(path.clone(), populate, true)?.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Failed to open MmapFuzzyIndex that was just created",
+                    )
+                })?,
+            ),
+            None => None,
+        };
+
         let mmap_index = MmapFullTextIndex {
             inverted_index,
+            fuzzy_index,
             tokenizer,
         };
 
