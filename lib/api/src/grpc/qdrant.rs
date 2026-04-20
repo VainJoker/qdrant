@@ -1507,6 +1507,10 @@ pub struct TextIndexParams {
     /// Default: true.
     #[prost(bool, optional, tag = "10")]
     pub enable_hnsw: ::core::option::Option<bool>,
+    /// If true - support fuzzy matching.
+    /// Default: false.
+    #[prost(bool, optional, tag = "11")]
+    pub fuzzy_matching: ::core::option::Option<bool>,
 }
 #[derive(serde::Serialize)]
 #[allow(clippy::derive_partial_eq_without_eq)]
