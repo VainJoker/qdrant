@@ -55,7 +55,7 @@ impl ImmutableFullTextIndex {
             .map(ImmutableFuzzyIndex::ram_usage_bytes)
             .unwrap_or(0);
         result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes() + fuzzy_bytes;
-        
+
         Ok(result)
     }
 

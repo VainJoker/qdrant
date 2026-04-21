@@ -278,7 +278,9 @@ fn get_match_text_checker(
                 TextQueryType::Phrase => full_text_index.parse_phrase_query(&text, &hw_counter),
                 TextQueryType::Text => full_text_index.parse_text_query(&text, &hw_counter),
                 TextQueryType::TextAny => full_text_index.parse_text_any_query(&text, &hw_counter),
-                TextQueryType::Fuzzy(fuzzy) => full_text_index.parse_fuzzy_query(&fuzzy, &hw_counter),
+                TextQueryType::Fuzzy(fuzzy) => {
+                    full_text_index.parse_fuzzy_query(&fuzzy, &hw_counter)
+                }
             };
 
             let Some(parsed_query) = query_opt else {

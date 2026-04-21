@@ -293,9 +293,7 @@ impl ImmutableInvertedIndex {
         }
 
         match &self.postings {
-            ImmutablePostings::Ids(postings) => {
-                collect_and_merge(postings, fuzzy_doc, is_active)
-            }
+            ImmutablePostings::Ids(postings) => collect_and_merge(postings, fuzzy_doc, is_active),
             ImmutablePostings::WithPositions(postings) => {
                 collect_and_merge(postings, fuzzy_doc, is_active)
             }
