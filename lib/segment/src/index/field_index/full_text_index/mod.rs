@@ -1,5 +1,5 @@
-#![allow(dead_code)]
 mod fuzzy_index;
+mod fuzzy_query;
 
 mod immutable_text_index;
 mod inverted_index;

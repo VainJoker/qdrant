@@ -1,12 +1,16 @@
 mod test_congruence;
 
+use std::collections::HashSet;
+
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
 use tempfile::Builder;
 
 use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
+use crate::index::field_index::full_text_index::inverted_index::ParsedQuery;
 use crate::index::field_index::full_text_index::text_index::FullTextIndex;
 use crate::index::field_index::{FieldIndexBuilderTrait as _, ValueIndexer};
+use crate::types::{Fuzzy, FuzzyParams, MatchFuzzy};
 
 fn movie_titles() -> Vec<String> {
     vec![
@@ -416,4 +420,335 @@ fn test_ascii_folding_in_full_text_index_word() {
         .unwrap()
         .collect();
     assert!(results_acento2.contains(&0));
+}
+
+fn fuzzy_config() -> TextIndexParams {
+    TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::default(),
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        lowercase: Some(true),
+        ..Default::default()
+    }
+}
+
+fn fp(max_edits: u8, prefix_length: u8, max_expansions: u8) -> Option<FuzzyParams> {
+    Some(FuzzyParams {
+        max_edits,
+        prefix_length,
+        max_expansions,
+    })
+}
+
+/// Build three index variants (mutable/immutable/mmap) from `movie_titles()`,
+/// then run `check` against each one.
+fn with_fuzzy_indices(check: impl Fn(&str, &FullTextIndex)) {
+    let hw = HardwareCounterCell::default();
+    let config = fuzzy_config();
+    let titles = movie_titles();
+
+    let dir0 = Builder::new().prefix("fz").tempdir().unwrap();
+    let dir1 = Builder::new().prefix("fz").tempdir().unwrap();
+    let dir2 = Builder::new().prefix("fz").tempdir().unwrap();
+
+    let mut mutable = FullTextIndex::builder_gridstore(dir0.path().to_path_buf(), config.clone())
+        .make_empty()
+        .unwrap();
+
+    let mut immutable_b =
+        FullTextIndex::builder_mmap(dir1.path().to_path_buf(), config.clone(), false);
+    immutable_b.init().unwrap();
+
+    let mut mmap_b = FullTextIndex::builder_mmap(dir2.path().to_path_buf(), config, true);
+    mmap_b.init().unwrap();
+
+    for (id, text) in titles.into_iter().enumerate() {
+        let id = id as u32;
+        mutable.add_many(id, vec![text.clone()], &hw).unwrap();
+        immutable_b.add_many(id, vec![text.clone()], &hw).unwrap();
+        mmap_b.add_many(id, vec![text], &hw).unwrap();
+    }
+
+    let immutable = immutable_b.finalize().unwrap();
+    let mmap = mmap_b.finalize().unwrap();
+
+    for (name, index) in [
+        ("mutable", &mutable),
+        ("immutable", &immutable),
+        ("mmap", &mmap),
+    ] {
+        check(name, index);
+    }
+}
+
+/// Assert that a fuzzy query returns exactly `expected` point ids on every index variant,
+/// and that `check_match` agrees with `filter_query` for every document.
+fn assert_fuzzy(fuzzy: Fuzzy, expected: Option<&[u32]>) {
+    let hw = HardwareCounterCell::default();
+    let num_docs = movie_titles().len() as u32;
+    with_fuzzy_indices(|variant, index| {
+        let parsed = index.parse_fuzzy_query(
+            &MatchFuzzy {
+                fuzzy: vec![fuzzy.clone()],
+            },
+            &hw,
+        );
+
+        let Some(parsed) = parsed else {
+            assert!(
+                expected.map_or(true, |ids| ids.is_empty()),
+                "[{variant}] parse returned None but expected non-empty results"
+            );
+            return;
+        };
+
+        let actual: HashSet<u32> = index.filter_query(parsed.clone(), &hw).unwrap().collect();
+
+        // check_match must agree with filter_query for every indexed document
+        for point_id in 0..num_docs {
+            assert_eq!(
+                index.check_match(&parsed, point_id),
+                actual.contains(&point_id),
+                "[{variant}] check_match/filter_query disagree at doc {point_id}"
+            );
+        }
+
+        if let Some(ids) = expected {
+            let expected: HashSet<u32> = ids.iter().copied().collect();
+            assert_eq!(
+                actual,
+                expected,
+                "[{variant}] missing={:?} extra={:?}",
+                expected.difference(&actual).collect::<Vec<_>>(),
+                actual.difference(&expected).collect::<Vec<_>>()
+            );
+        }
+    });
+}
+
+// ── Fuzzy Text (AND semantics) ───────────────────────────────────────────────
+//
+// movie_titles index (relevant tokens, lowercase word tokenizer):
+//   12: "Buy Jupiter"       → ["buy", "jupiter"]
+//   43: "Gold"              → ["gold"]
+//   44: "Good Taste"        → ["good", "taste"]
+//   60: "In a Good Cause—"  → ["in", "a", "good", "cause"]
+//   76: "Little Lost Robot" → ["little", "lost", "robot"]
+//   89: "Nobody Here But—"  → ["nobody", "here", "but"]
+//   92: "Old-fashioned"     → ["old", "fashioned"]
+//  103: "Risk"              → ["risk"]
+//  104: "Robot AL-76 …"     → ["robot", "al", "76", "goes", "astray"]
+//  105: "Robot Dreams"      → ["robot", "dreams"]
+//  107: "Sally"             → ["sally"]
+
+#[test]
+fn test_fuzzy_text_all_tokens_match() {
+    // "robt"→"robot"(edit 1), "drems"→"dreams"(edit 1) → AND = doc 105
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "robt drems".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[105]),
+    );
+}
+
+#[test]
+fn test_fuzzy_text_missing_corpus_token_returns_none() {
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "robt zzzzzzzz".into(),
+            params: fp(1, 0, 50),
+        },
+        None,
+    );
+}
+
+// ── Edit-distance ────────────────────────────────────────────────────────────
+
+#[test]
+fn test_fuzzy_edit0_exact_match_only() {
+    // exact token → matches all docs containing "robot"
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "robot".into(),
+            params: fp(0, 0, 50),
+        },
+        Some(&[76, 104, 105]),
+    );
+    // 1-edit typo → no match at edit distance 0
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "robt".into(),
+            params: fp(0, 0, 50),
+        },
+        None,
+    );
+}
+
+#[test]
+fn test_fuzzy_edit1_rejects_2edit_neighbours() {
+    // "risk"(103) exact; "ring"(102) at edit_dist=2 → excluded
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "risk".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[103]),
+    );
+}
+
+// ── prefix_length guard ──────────────────────────────────────────────────────
+//
+// "gold" at edit=1 matches: "gold"(43), "good"(44,60) [l→o], "old"(92) [del g]
+// prefix=2 "go" → keeps "gold","good"; blocks "old" ("ol"≠"go")
+// prefix=3 "gol" → keeps "gold"; blocks "good" ("goo"≠"gol") and "old"
+
+#[test]
+fn test_fuzzy_prefix2_blocks_different_start() {
+    // prefix=2 "go" → "old" excluded (starts "ol")
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "gold".into(),
+            params: fp(1, 2, 50),
+        },
+        Some(&[43, 44, 60]),
+    );
+}
+
+#[test]
+fn test_fuzzy_prefix3_blocks_more() {
+    // prefix=3 "gol" → both "good" and "old" excluded
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "gold".into(),
+            params: fp(1, 3, 50),
+        },
+        Some(&[43]),
+    );
+}
+
+#[test]
+fn test_fuzzy_prefix_exceeds_term_length_degrades_to_exact() {
+    // prefix=99 > len("gold")=4 → degrades to exact match only
+    assert_fuzzy(
+        Fuzzy::Text {
+            text: "gold".into(),
+            params: fp(1, 99, 50),
+        },
+        Some(&[43]),
+    );
+}
+
+// ── Fuzzy Phrase (ordered, adjacent) ─────────────────────────────────────────
+//
+// Doc 76 "Little Lost Robot" → tokens: little(0) lost(1) robot(2)
+
+#[test]
+fn test_fuzzy_phrase_correct_order() {
+    // "losst robt" → fuzzy "lost robot", adjacent at pos 1,2 in doc 76
+    assert_fuzzy(
+        Fuzzy::Phrase {
+            phrase: "losst robt".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[76]),
+    );
+}
+
+#[test]
+fn test_fuzzy_phrase_reversed_no_match() {
+    // "robot" at pos 2, "lost" at pos 1 → wrong order
+    assert_fuzzy(
+        Fuzzy::Phrase {
+            phrase: "robt losst".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[]),
+    );
+}
+
+#[test]
+fn test_fuzzy_phrase_non_adjacent_no_match() {
+    // "little" at pos 0, "robot" at pos 2 → gap (pos 1 = "lost")
+    assert_fuzzy(
+        Fuzzy::Phrase {
+            phrase: "litlle robt".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[]),
+    );
+}
+
+// ── Fuzzy TextAny (OR semantics) ─────────────────────────────────────────────
+
+#[test]
+fn test_fuzzy_text_any_union() {
+    // "robt"→"robot"(76,104,105), "saly"→"sally"(107) → union
+    assert_fuzzy(
+        Fuzzy::TextAny {
+            text_any: "robt saly".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[76, 104, 105, 107]),
+    );
+}
+
+#[test]
+fn test_fuzzy_text_any_all_miss_returns_none() {
+    assert_fuzzy(
+        Fuzzy::TextAny {
+            text_any: "zzzzzz qqqqqq".into(),
+            params: fp(1, 0, 50),
+        },
+        None,
+    );
+}
+
+#[test]
+fn test_fuzzy_text_any_failing_token_ignored() {
+    // "zzzzzz" matches nothing; result = matches for "robot" only
+    assert_fuzzy(
+        Fuzzy::TextAny {
+            text_any: "robot zzzzzz".into(),
+            params: fp(1, 0, 50),
+        },
+        Some(&[76, 104, 105]),
+    );
+}
+
+// ── max_expansions cap ───────────────────────────────────────────────────────
+
+#[test]
+fn test_fuzzy_max_expansions_caps_term_count() {
+    let hw = HardwareCounterCell::default();
+    // "the" has many edit-1 neighbours in the corpus → good for testing the cap
+    let fuzzy = Fuzzy::Text {
+        text: "the".into(),
+        params: fp(1, 0, 2),
+    };
+
+    with_fuzzy_indices(|variant, index| {
+        let parsed = index
+            .parse_fuzzy_query(
+                &MatchFuzzy {
+                    fuzzy: vec![fuzzy.clone()],
+                },
+                &hw,
+            )
+            .unwrap_or_else(|| panic!("[{variant}] parse returned None"));
+
+        let count = match &parsed {
+            ParsedQuery::FuzzyAllTokens(g) | ParsedQuery::FuzzyPhrase(g) => {
+                g.iter().map(|g| g.len()).sum()
+            }
+            ParsedQuery::FuzzyAnyTokens(t) => t.len(),
+            other => panic!("[{variant}] expected fuzzy query, got {other:?}"),
+        };
+        assert!(
+            count <= 2,
+            "[{variant}] expected at most 2 expanded terms, got {count}"
+        );
+    });
 }
