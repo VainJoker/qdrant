@@ -7,8 +7,8 @@ use crate::index::field_index::FieldIndex;
 use crate::index::query_optimization::optimized_filter::ConditionCheckerFn;
 use crate::payload_storage::condition_checker::INDEXSET_ITER_THRESHOLD;
 use crate::types::{
-    AnyVariants, Match, MatchAny, MatchExcept, MatchPhrase, MatchText, MatchTextAny, MatchValue,
-    ValueVariants,
+    AnyVariants, Fuzzy, Match, MatchAny, MatchExcept, MatchFuzzy, MatchPhrase, MatchText,
+    MatchTextAny, MatchValue, ValueVariants,
 };
 
 pub fn get_match_checkers(
@@ -26,6 +26,9 @@ pub fn get_match_checkers(
         }
         Match::Phrase(MatchPhrase { phrase }) => {
             get_match_text_checker(phrase, TextQueryType::Phrase, index, hw_acc)
+        }
+        Match::Fuzzy(MatchFuzzy { fuzzy }) => {
+            get_match_text_checker(String::new(), TextQueryType::Fuzzy(fuzzy), index, hw_acc)
         }
         Match::Any(MatchAny { any }) => get_match_any_checker(any, index, hw_acc),
         Match::Except(MatchExcept { except }) => get_match_except_checker(except, index, hw_acc),
@@ -259,6 +262,7 @@ enum TextQueryType {
     Phrase,
     Text,
     TextAny,
+    Fuzzy(Vec<Fuzzy>),
 }
 
 fn get_match_text_checker(
@@ -268,31 +272,36 @@ fn get_match_text_checker(
     hw_acc: HwMeasurementAcc,
 ) -> Option<ConditionCheckerFn<'_>> {
     let hw_counter = hw_acc.get_counter_cell();
-    match index {
-        FieldIndex::FullTextIndex(full_text_index) => {
-            let query_opt = match query_type {
-                TextQueryType::Phrase => full_text_index.parse_phrase_query(&text, &hw_counter),
-                TextQueryType::Text => full_text_index.parse_text_query(&text, &hw_counter),
-                TextQueryType::TextAny => full_text_index.parse_text_any_query(&text, &hw_counter),
-            };
 
-            let Some(parsed_query) = query_opt else {
-                return Some(Box::new(|_| false));
-            };
-
-            Some(Box::new(move |point_id: PointOffsetType| {
-                full_text_index.check_match(&parsed_query, point_id)
-            }))
-        }
-        FieldIndex::BoolIndex(_)
+    let full_text_index = match index {
+        FieldIndex::FullTextIndex(idx) => idx,
+        FieldIndex::IntIndex(_)
         | FieldIndex::DatetimeIndex(_)
-        | FieldIndex::FloatIndex(_)
-        | FieldIndex::GeoIndex(_)
-        | FieldIndex::IntIndex(_)
         | FieldIndex::IntMapIndex(_)
         | FieldIndex::KeywordIndex(_)
+        | FieldIndex::FloatIndex(_)
+        | FieldIndex::GeoIndex(_)
+        | FieldIndex::BoolIndex(_)
         | FieldIndex::UuidIndex(_)
         | FieldIndex::UuidMapIndex(_)
-        | FieldIndex::NullIndex(_) => None,
-    }
+        | FieldIndex::NullIndex(_) => return None,
+    };
+
+    let parsed = match query_type {
+        TextQueryType::Fuzzy(fuzzy) => {
+            let q = MatchFuzzy { fuzzy };
+            full_text_index.parse_fuzzy_query(&q, &hw_counter)
+        }
+        TextQueryType::Phrase => full_text_index.parse_phrase_query(&text, &hw_counter),
+        TextQueryType::Text => full_text_index.parse_text_query(&text, &hw_counter),
+        TextQueryType::TextAny => full_text_index.parse_text_any_query(&text, &hw_counter),
+    };
+
+    let Some(parsed_query) = parsed else {
+        return Some(Box::new(|_| false));
+    };
+
+    Some(Box::new(move |point_id: PointOffsetType| {
+        full_text_index.check_match(&parsed_query, point_id)
+    }))
 }

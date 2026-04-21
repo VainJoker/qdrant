@@ -228,6 +228,10 @@ impl Tokenizer {
             }
         }
     }
+
+    pub fn tokens_processor(&self) -> &TokensProcessor {
+        &self.tokens_processor
+    }
 }
 
 #[cfg(test)]

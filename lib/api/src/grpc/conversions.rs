@@ -2093,6 +2093,38 @@ impl From<segment::types::ValuesCount> for ValuesCount {
     }
 }
 
+impl From<grpc::FuzzyParams> for segment::types::FuzzyParams {
+    fn from(params: grpc::FuzzyParams) -> Self {
+        let defaults = segment::types::FuzzyParams::default();
+        let clamp_u8 = |v: u32| v.min(u32::from(u8::MAX)) as u8;
+        Self {
+            max_edits: params.max_edits.map_or(defaults.max_edits, clamp_u8),
+            prefix_length: params
+                .prefix_length
+                .map_or(defaults.prefix_length, clamp_u8),
+            max_expansions: params
+                .max_expansions
+                .map_or(defaults.max_expansions, clamp_u8),
+        }
+    }
+}
+
+impl From<segment::types::FuzzyParams> for grpc::FuzzyParams {
+    fn from(params: segment::types::FuzzyParams) -> Self {
+        Self {
+            max_edits: Some(u32::from(params.max_edits)),
+            prefix_length: Some(u32::from(params.prefix_length)),
+            max_expansions: Some(u32::from(params.max_expansions)),
+        }
+    }
+}
+
+impl From<&segment::types::FuzzyParams> for grpc::FuzzyParams {
+    fn from(params: &segment::types::FuzzyParams) -> Self {
+        (*params).into()
+    }
+}
+
 impl TryFrom<Match> for segment::types::Match {
     type Error = Status;
 
@@ -2115,6 +2147,15 @@ impl TryFrom<Match> for segment::types::Match {
                 }
                 MatchValue::TextAny(text_any) => {
                     segment::types::Match::TextAny(segment::types::MatchTextAny { text_any })
+                }
+                MatchValue::Fuzzy(fuzzy) => {
+                    segment::types::Match::Fuzzy(segment::types::MatchFuzzy {
+                        fuzzy: fuzzy
+                            .fuzzy
+                            .into_iter()
+                            .map(TryInto::try_into)
+                            .collect::<Result<_, _>>()?,
+                    })
                 }
             }),
             _ => Err(Status::invalid_argument("Malformed Match condition")),
@@ -2159,9 +2200,53 @@ impl From<segment::types::Match> for Match {
             segment::types::Match::TextAny(segment::types::MatchTextAny { text_any }) => {
                 MatchValue::TextAny(text_any)
             }
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy { fuzzy }) => {
+                MatchValue::Fuzzy(grpc::RepeatedFuzzy {
+                    fuzzy: fuzzy.into_iter().map(Into::into).collect(),
+                })
+            }
         };
         Self {
             match_value: Some(match_value),
+        }
+    }
+}
+
+impl TryFrom<grpc::FuzzyMatch> for segment::types::Fuzzy {
+    type Error = Status;
+
+    fn try_from(fuzzy: grpc::FuzzyMatch) -> Result<Self, Self::Error> {
+        let params: Option<segment::types::FuzzyParams> = fuzzy.params.map(Into::into);
+        match fuzzy.value {
+            Some(grpc::fuzzy_match::Value::Text(text)) => {
+                Ok(segment::types::Fuzzy::Text { text, params })
+            }
+            Some(grpc::fuzzy_match::Value::Phrase(phrase)) => {
+                Ok(segment::types::Fuzzy::Phrase { phrase, params })
+            }
+            Some(grpc::fuzzy_match::Value::TextAny(text_any)) => {
+                Ok(segment::types::Fuzzy::TextAny { text_any, params })
+            }
+            None => Err(Status::invalid_argument("Malformed fuzzy match condition")),
+        }
+    }
+}
+
+impl From<segment::types::Fuzzy> for grpc::FuzzyMatch {
+    fn from(fuzzy: segment::types::Fuzzy) -> Self {
+        match fuzzy {
+            segment::types::Fuzzy::Text { text, params } => grpc::FuzzyMatch {
+                value: Some(grpc::fuzzy_match::Value::Text(text)),
+                params: params.as_ref().map(Into::into),
+            },
+            segment::types::Fuzzy::Phrase { phrase, params } => grpc::FuzzyMatch {
+                value: Some(grpc::fuzzy_match::Value::Phrase(phrase)),
+                params: params.as_ref().map(Into::into),
+            },
+            segment::types::Fuzzy::TextAny { text_any, params } => grpc::FuzzyMatch {
+                value: Some(grpc::fuzzy_match::Value::TextAny(text_any)),
+                params: params.as_ref().map(Into::into),
+            },
         }
     }
 }
