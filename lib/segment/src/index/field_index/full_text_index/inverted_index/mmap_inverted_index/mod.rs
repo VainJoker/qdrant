@@ -19,13 +19,15 @@ use super::positions::Positions;
 use super::postings_iterator::{
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
 };
-use super::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::Flusher;
 use crate::common::buffered_update_bitslice::BufferedUpdateBitSlice;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
-    check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
+    check_compressed_postings_fuzzy_phrase, check_compressed_postings_phrase,
+    intersect_compressed_postings_fuzzy_phrase_iterator,
+    intersect_compressed_postings_phrase_iterator, merge_fuzzy_all_tokens_iterator,
 };
 
 mod create_postings;
@@ -388,6 +390,95 @@ impl MmapInvertedIndex {
             }
             // cannot do phrase matching if there's no positional information
             MmapPostingsEnum::Ids(_postings) => Ok(false),
+        }
+    }
+
+    /// Iterate over point ids whose documents match all fuzzy token groups
+    fn filter_fuzzy_all_tokens<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+
+        let is_active = move |idx: PointOffsetType| self.is_active(idx);
+
+        match &self.storage.postings {
+            MmapPostingsEnum::Ids(postings) => {
+                merge_fuzzy_all_tokens_iterator(fuzzy_doc, |tid| postings.get(tid), is_active)
+            }
+            MmapPostingsEnum::WithPositions(postings) => {
+                merge_fuzzy_all_tokens_iterator(fuzzy_doc, |tid| postings.get(tid), is_active)
+            }
+        }
+    }
+
+    /// Iterate over point ids whose documents match a fuzzy phrase
+    fn filter_fuzzy_phrase<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+
+        match &self.storage.postings {
+            MmapPostingsEnum::Ids(_) => Box::new(std::iter::empty()),
+            MmapPostingsEnum::WithPositions(postings) => {
+                let is_active = move |idx: PointOffsetType| self.is_active(idx);
+                Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
+                    fuzzy_doc,
+                    |tid| postings.get(*tid),
+                    is_active,
+                ))
+            }
+        }
+    }
+
+    fn check_fuzzy_all_tokens(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
+            return false;
+        }
+
+        fn check_any<V: MmapPostingValue>(
+            postings: &MmapPostings<V>,
+            group: &TokenSet,
+            point_id: PointOffsetType,
+        ) -> bool {
+            group.tokens().iter().any(|token_id| {
+                postings
+                    .get(*token_id)
+                    .unwrap()
+                    .visitor()
+                    .contains(point_id)
+            })
+        }
+
+        // Hoist the postings enum match outside the loop — the variant never changes
+        // between iterations, so we avoid re-dispatching on every group.
+        match &self.storage.postings {
+            MmapPostingsEnum::Ids(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+            MmapPostingsEnum::WithPositions(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+        }
+    }
+
+    fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if !self.is_active(point_id) {
+            return false;
+        }
+
+        match &self.storage.postings {
+            MmapPostingsEnum::Ids(_) => false,
+            MmapPostingsEnum::WithPositions(postings) => {
+                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
+                    postings.get(*tid)
+                })
+            }
         }
     }
 
