@@ -7,8 +7,8 @@ use crate::index::field_index::FieldIndex;
 use crate::index::query_optimization::optimized_filter::ConditionCheckerFn;
 use crate::payload_storage::condition_checker::INDEXSET_ITER_THRESHOLD;
 use crate::types::{
-    AnyVariants, Match, MatchAny, MatchExcept, MatchPhrase, MatchText, MatchTextAny, MatchValue,
-    ValueVariants,
+    AnyVariants, Fuzzy, Match, MatchAny, MatchExcept, MatchFuzzy, MatchPhrase, MatchText,
+    MatchTextAny, MatchValue, ValueVariants,
 };
 
 pub fn get_match_checkers(
@@ -26,6 +26,9 @@ pub fn get_match_checkers(
         }
         Match::Phrase(MatchPhrase { phrase }) => {
             get_match_text_checker(phrase, TextQueryType::Phrase, index, hw_acc)
+        }
+        Match::Fuzzy(MatchFuzzy { fuzzy }) => {
+            get_match_text_checker(String::new(), TextQueryType::Fuzzy(fuzzy), index, hw_acc)
         }
         Match::Any(MatchAny { any }) => get_match_any_checker(any, index, hw_acc),
         Match::Except(MatchExcept { except }) => get_match_except_checker(except, index, hw_acc),
@@ -259,6 +262,7 @@ enum TextQueryType {
     Phrase,
     Text,
     TextAny,
+    Fuzzy(Vec<Fuzzy>),
 }
 
 fn get_match_text_checker(
@@ -274,6 +278,7 @@ fn get_match_text_checker(
                 TextQueryType::Phrase => full_text_index.parse_phrase_query(&text, &hw_counter),
                 TextQueryType::Text => full_text_index.parse_text_query(&text, &hw_counter),
                 TextQueryType::TextAny => full_text_index.parse_text_any_query(&text, &hw_counter),
+                TextQueryType::Fuzzy(fuzzy) => full_text_index.parse_fuzzy_query(&fuzzy, &hw_counter),
             };
 
             let Some(parsed_query) = query_opt else {

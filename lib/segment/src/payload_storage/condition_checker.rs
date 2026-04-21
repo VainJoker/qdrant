@@ -172,6 +172,7 @@ impl ValueChecker for Match {
                     .any(|token| stored.contains(token)),
                 _ => false,
             },
+            Match::Fuzzy(_) => false, // Fuzzy matching is not supported in payload conditions
             Match::Any(MatchAny { any }) => match (payload, any) {
                 (Value::String(stored), AnyVariants::Strings(list)) => {
                     if list.len() < INDEXSET_ITER_THRESHOLD {

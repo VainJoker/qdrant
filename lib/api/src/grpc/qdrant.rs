@@ -272,7 +272,7 @@ pub struct FieldCondition {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Match {
-    #[prost(oneof = "r#match::MatchValue", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10")]
+    #[prost(oneof = "r#match::MatchValue", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11")]
     pub match_value: ::core::option::Option<r#match::MatchValue>,
 }
 /// Nested message and enum types in `Match`.
@@ -311,6 +311,9 @@ pub mod r#match {
         /// Match any word in the text
         #[prost(string, tag = "10")]
         TextAny(::prost::alloc::string::String),
+        /// Match multiple fuzzy clauses with independent parameters
+        #[prost(message, tag = "11")]
+        Fuzzy(super::RepeatedFuzzy),
     }
 }
 #[derive(serde::Serialize)]
@@ -421,6 +424,56 @@ pub struct ValuesCount {
     pub gte: ::core::option::Option<u64>,
     #[prost(uint64, optional, tag = "4")]
     pub lte: ::core::option::Option<u64>,
+}
+/// Parameters for fuzzy matching
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyParams {
+    /// Maximum edit distance (Levenshtein). 0..=2, default 0.
+    #[prost(uint32, optional, tag = "1")]
+    pub max_edits: ::core::option::Option<u32>,
+    /// Number of initial characters that must match exactly. Default 0.
+    #[prost(uint32, optional, tag = "2")]
+    pub prefix_length: ::core::option::Option<u32>,
+    /// Maximum number of terms to expand per token. Default 30, capped at 30.
+    #[prost(uint32, optional, tag = "3")]
+    pub max_expansions: ::core::option::Option<u32>,
+}
+/// Fuzzy text match
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FuzzyMatch {
+    /// Fuzzy matching parameters
+    #[prost(message, optional, tag = "4")]
+    pub params: ::core::option::Option<FuzzyParams>,
+    #[prost(oneof = "fuzzy_match::Value", tags = "1, 2, 3")]
+    pub value: ::core::option::Option<fuzzy_match::Value>,
+}
+/// Nested message and enum types in `FuzzyMatch`.
+pub mod fuzzy_match {
+    #[derive(serde::Serialize)]
+    #[allow(clippy::derive_partial_eq_without_eq)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        /// Text to match
+        #[prost(string, tag = "1")]
+        Text(::prost::alloc::string::String),
+        /// Phrase to match
+        #[prost(string, tag = "2")]
+        Phrase(::prost::alloc::string::String),
+        /// Text (any word) to match
+        #[prost(string, tag = "3")]
+        TextAny(::prost::alloc::string::String),
+    }
+}
+#[derive(serde::Serialize)]
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RepeatedFuzzy {
+    #[prost(message, repeated, tag = "1")]
+    pub fuzzy: ::prost::alloc::vec::Vec<FuzzyMatch>,
 }
 #[derive(validator::Validate)]
 #[derive(serde::Serialize)]
