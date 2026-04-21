@@ -394,89 +394,122 @@ impl MmapInvertedIndex {
     }
 
     /// Iterate over point ids whose documents match all fuzzy token groups
-    fn filter_fuzzy_all_tokens<'a>(
-        &'a self,
+    fn filter_fuzzy_all_tokens(
+        &self,
         fuzzy_doc: FuzzyDocument,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> OperationResult<Vec<PointOffsetType>> {
         if fuzzy_doc.is_empty() {
-            return Box::new(std::iter::empty());
+            return Ok(Vec::new());
         }
 
         let is_active = move |idx: PointOffsetType| self.is_active(idx);
+        let all_tokens = fuzzy_doc.all_tokens();
+
+        fn collect_matches<V: ZerocopyPostingValue>(
+            postings: &UniversalPostings<V, MmapFile>,
+            all_tokens: &TokenSet,
+            fuzzy_doc: FuzzyDocument,
+            is_active: impl Fn(PointOffsetType) -> bool,
+        ) -> OperationResult<Vec<PointOffsetType>> {
+            postings.with_existing_postings(all_tokens.tokens(), |views| {
+                Ok(merge_fuzzy_all_tokens_iterator(fuzzy_doc, views, is_active).collect())
+            })
+        }
 
         match &self.storage.postings {
             MmapPostingsEnum::Ids(postings) => {
-                merge_fuzzy_all_tokens_iterator(fuzzy_doc, |tid| postings.get(tid), is_active)
+                collect_matches(postings, &all_tokens, fuzzy_doc, is_active)
             }
             MmapPostingsEnum::WithPositions(postings) => {
-                merge_fuzzy_all_tokens_iterator(fuzzy_doc, |tid| postings.get(tid), is_active)
+                collect_matches(postings, &all_tokens, fuzzy_doc, is_active)
             }
         }
     }
 
     /// Iterate over point ids whose documents match a fuzzy phrase
-    fn filter_fuzzy_phrase<'a>(
-        &'a self,
+    fn filter_fuzzy_phrase(
+        &self,
         fuzzy_doc: FuzzyDocument,
-    ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+    ) -> OperationResult<Vec<PointOffsetType>> {
         if fuzzy_doc.is_empty() {
-            return Box::new(std::iter::empty());
+            return Ok(Vec::new());
         }
 
         match &self.storage.postings {
-            MmapPostingsEnum::Ids(_) => Box::new(std::iter::empty()),
+            MmapPostingsEnum::Ids(_) => Ok(Vec::new()),
             MmapPostingsEnum::WithPositions(postings) => {
                 let is_active = move |idx: PointOffsetType| self.is_active(idx);
-                Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
-                    fuzzy_doc,
-                    |tid| postings.get(*tid),
-                    is_active,
-                ))
+                let all_tokens = fuzzy_doc.all_tokens();
+                postings.with_existing_postings(all_tokens.tokens(), |views| {
+                    Ok(intersect_compressed_postings_fuzzy_phrase_iterator(
+                        fuzzy_doc, views, is_active,
+                    )
+                    .collect())
+                })
             }
         }
     }
 
-    fn check_fuzzy_all_tokens(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+    fn check_fuzzy_all_tokens(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        point_id: PointOffsetType,
+    ) -> OperationResult<bool> {
         if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
-            return false;
+            return Ok(false);
         }
 
-        fn check_any<V: MmapPostingValue>(
-            postings: &MmapPostings<V>,
+        fn check_any<V: ZerocopyPostingValue>(
+            postings: &UniversalPostings<V, MmapFile>,
             group: &TokenSet,
             point_id: PointOffsetType,
-        ) -> bool {
-            group.tokens().iter().any(|token_id| {
-                postings
-                    .get(*token_id)
-                    .unwrap()
-                    .visitor()
-                    .contains(point_id)
+        ) -> OperationResult<bool> {
+            postings.with_existing_postings(group.tokens(), |all_postings| {
+                Ok(all_postings
+                    .into_iter()
+                    .any(|(_token_id, posting)| posting.visitor().contains(point_id)))
             })
         }
 
         // Hoist the postings enum match outside the loop — the variant never changes
         // between iterations, so we avoid re-dispatching on every group.
         match &self.storage.postings {
-            MmapPostingsEnum::Ids(postings) => fuzzy_doc
-                .iter()
-                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
-            MmapPostingsEnum::WithPositions(postings) => fuzzy_doc
-                .iter()
-                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+            MmapPostingsEnum::Ids(postings) => {
+                for group in fuzzy_doc.iter() {
+                    if group.is_empty() || !check_any(postings, group, point_id)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            MmapPostingsEnum::WithPositions(postings) => {
+                for group in fuzzy_doc.iter() {
+                    if group.is_empty() || !check_any(postings, group, point_id)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
         }
     }
 
-    fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+    fn check_fuzzy_phrase(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        point_id: PointOffsetType,
+    ) -> OperationResult<bool> {
         if !self.is_active(point_id) {
-            return false;
+            return Ok(false);
         }
 
         match &self.storage.postings {
-            MmapPostingsEnum::Ids(_) => false,
+            MmapPostingsEnum::Ids(_) => Ok(false),
             MmapPostingsEnum::WithPositions(postings) => {
-                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
-                    postings.get(*tid)
+                let all_tokens = fuzzy_doc.all_tokens();
+                postings.with_existing_postings(all_tokens.tokens(), |views| {
+                    Ok(check_compressed_postings_fuzzy_phrase(
+                        fuzzy_doc, point_id, views,
+                    ))
                 })
             }
         }
@@ -590,7 +623,11 @@ impl InvertedIndex for MmapInvertedIndex {
         let ids = match query {
             ParsedQuery::AllTokens(tokens) => self.filter_has_all(tokens)?,
             ParsedQuery::Phrase(phrase) => self.filter_has_phrase(phrase)?,
-            ParsedQuery::AnyTokens(tokens) => self.filter_has_any(tokens)?,
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.filter_has_any(tokens)?
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.filter_fuzzy_all_tokens(fuzzy_doc)?,
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.filter_fuzzy_phrase(fuzzy_doc)?,
         };
         Ok(Box::new(ids.into_iter()))
     }
@@ -625,7 +662,13 @@ impl InvertedIndex for MmapInvertedIndex {
         match parsed_query {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
-            ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.check_has_any(tokens, point_id)
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                self.check_fuzzy_all_tokens(fuzzy_doc, point_id)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.check_fuzzy_phrase(fuzzy_doc, point_id),
         }
     }
 

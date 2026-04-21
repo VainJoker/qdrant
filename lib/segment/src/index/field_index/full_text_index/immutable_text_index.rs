@@ -48,13 +48,14 @@ impl ImmutableFullTextIndex {
             storage: Storage::Mmap(Box::new(index)),
             cached_ram_usage_bytes: 0,
         };
-        
+
         let fuzzy_bytes = result
             .fuzzy_index
             .as_ref()
             .map(ImmutableFuzzyIndex::ram_usage_bytes)
             .unwrap_or(0);
         result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes() + fuzzy_bytes;
+        
         Ok(result)
     }
 

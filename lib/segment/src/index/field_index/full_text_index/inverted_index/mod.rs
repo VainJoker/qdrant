@@ -229,6 +229,16 @@ pub enum ParsedQuery {
 
     /// All these tokens must be present in the document, in the same order as this query.
     Phrase(Document),
+
+    /// AND semantics: every group must have at least one match in the document.
+    FuzzyAllTokens(FuzzyDocument),
+
+    /// OR semantics: any fuzzy-expanded token matching the document is sufficient.
+    FuzzyAnyTokens(TokenSet),
+
+    /// Position-ordered phrase match: the document must contain a contiguous window
+    /// where position *i* matches at least one token from `groups[i]`.
+    FuzzyPhrase(FuzzyDocument),
 }
 
 pub trait InvertedIndex {
@@ -305,6 +315,15 @@ pub trait InvertedIndex {
             }
             ParsedQuery::AnyTokens(tokens) => {
                 self.estimate_has_any_cardinality(tokens, condition, hw_counter)
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                self.estimate_has_fuzzy_all_cardinality(fuzzy_doc, condition, hw_counter)
+            }
+            ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.estimate_has_any_cardinality(tokens, condition, hw_counter)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                self.estimate_has_fuzzy_phrase_cardinality(fuzzy_doc, condition, hw_counter)
             }
         }
     }
@@ -442,7 +461,10 @@ pub trait InvertedIndex {
             .map(|group| self.estimate_has_any_cardinality(group, condition, hw_counter))
             .collect::<OperationResult<Vec<_>>>()?;
 
-        Ok(combine_must_estimations(&group_estimations, self.points_count()))
+        Ok(combine_must_estimations(
+            &group_estimations,
+            self.points_count(),
+        ))
     }
 
     // Start with the fuzzy-all estimate, then scale it down using the same
