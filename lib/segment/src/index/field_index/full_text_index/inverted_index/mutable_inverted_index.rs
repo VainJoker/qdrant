@@ -329,7 +329,13 @@ impl InvertedIndex for MutableInvertedIndex {
         match query {
             ParsedQuery::AllTokens(tokens) => Ok(Box::new(self.filter_has_all(tokens))),
             ParsedQuery::Phrase(phrase) => Ok(Box::new(self.filter_has_phrase(phrase))),
-            ParsedQuery::AnyTokens(tokens) => Ok(Box::new(self.filter_has_any(tokens))),
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                Ok(Box::new(self.filter_has_any(tokens)))
+            }
+            ParsedQuery::FuzzyAllTokens(tokens) => {
+                Ok(Box::new(self.filter_fuzzy_all_tokens(tokens)))
+            }
+            ParsedQuery::FuzzyPhrase(phrase) => Ok(Box::new(self.filter_fuzzy_phrase(phrase))),
         }
     }
 
@@ -363,14 +369,18 @@ impl InvertedIndex for MutableInvertedIndex {
                 // Check that all tokens are in document, in order
                 doc.has_phrase(document)
             }
-            ParsedQuery::AnyTokens(query) => {
+            ParsedQuery::AnyTokens(query) | ParsedQuery::FuzzyAnyTokens(query) => {
                 let Some(doc) = self.get_tokens(point_id) else {
                     return false;
                 };
 
-                // Check that at least one token is in document
+                // Check that any token is in document
                 doc.has_any(query)
             }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                self.check_fuzzy_all_tokens(fuzzy_doc, point_id)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.check_fuzzy_phrase(fuzzy_doc, point_id),
         }
     }
 

@@ -371,7 +371,15 @@ impl InvertedIndex for ImmutableInvertedIndex {
         match query {
             ParsedQuery::AllTokens(tokens) => Ok(Box::new(self.filter_has_all(tokens))),
             ParsedQuery::Phrase(tokens) => Ok(Box::new(self.filter_has_phrase(tokens))),
-            ParsedQuery::AnyTokens(tokens) => Ok(Box::new(self.filter_has_any(tokens))),
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                Ok(Box::new(self.filter_has_any(tokens)))
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                Ok(Box::new(self.filter_fuzzy_all_tokens(fuzzy_doc)))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                Ok(Box::new(self.filter_fuzzy_phrase(fuzzy_doc)))
+            }
         }
     }
 
@@ -391,7 +399,13 @@ impl InvertedIndex for ImmutableInvertedIndex {
         match parsed_query {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
-            ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::AnyTokens(tokens) | ParsedQuery::FuzzyAnyTokens(tokens) => {
+                self.check_has_any(tokens, point_id)
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                self.check_fuzzy_all_tokens(fuzzy_doc, point_id)
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.check_fuzzy_phrase(fuzzy_doc, point_id),
         }
     }
 
