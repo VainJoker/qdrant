@@ -2621,7 +2621,7 @@ pub struct MatchExcept {
     pub except: AnyVariants,
 }
 
-/// Parameters for fuzzy (approximate) full-text matching.
+/// Parameters for fuzzy full-text matching.
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Validate, Copy, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub struct FuzzyParams {
