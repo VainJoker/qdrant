@@ -39,6 +39,22 @@ fn get_all_or_none<'a, V: PostingValue>(
         .collect()
 }
 
+/// Collect posting views for all token IDs that exist in the postings slice.
+/// Missing token IDs are silently skipped.
+fn get_existing<'a, V: PostingValue>(
+    postings: &'a [PostingList<V>],
+    token_ids: &[TokenId],
+) -> Vec<(TokenId, PostingListView<'a, V>)> {
+    token_ids
+        .iter()
+        .filter_map(|&token_id| {
+            postings
+                .get(token_id as usize)
+                .map(|list| (token_id, list.view()))
+        })
+        .collect()
+}
+
 #[cfg_attr(test, derive(Clone))]
 #[derive(Debug)]
 pub struct ImmutableInvertedIndex {
@@ -266,17 +282,21 @@ impl ImmutableInvertedIndex {
                 .is_some_and(|x| *x > 0)
         };
 
+        fn collect_and_merge<'a, V: PostingValue + 'a>(
+            postings: &'a [PostingList<V>],
+            fuzzy_doc: FuzzyDocument,
+            is_active: impl Fn(PointOffsetType) -> bool + 'a,
+        ) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
+            let all_tokens = fuzzy_doc.all_tokens();
+            let views = get_existing(postings, all_tokens.tokens());
+            merge_fuzzy_all_tokens_iterator(fuzzy_doc, views, is_active)
+        }
+
         match &self.postings {
-            ImmutablePostings::Ids(postings) => merge_fuzzy_all_tokens_iterator(
-                fuzzy_doc,
-                |tid| postings.get(tid as usize).map(PostingList::view),
-                is_active,
-            ),
-            ImmutablePostings::WithPositions(postings) => merge_fuzzy_all_tokens_iterator(
-                fuzzy_doc,
-                |tid| postings.get(tid as usize).map(PostingList::view),
-                is_active,
-            ),
+            ImmutablePostings::Ids(postings) => collect_and_merge(postings, fuzzy_doc, is_active),
+            ImmutablePostings::WithPositions(postings) => {
+                collect_and_merge(postings, fuzzy_doc, is_active)
+            }
         }
     }
 
@@ -297,10 +317,10 @@ impl ImmutableInvertedIndex {
                         .get(idx as usize)
                         .is_some_and(|x| *x > 0)
                 };
+                let all_tokens = fuzzy_doc.all_tokens();
+                let views = get_existing(postings, all_tokens.tokens());
                 Box::new(intersect_compressed_postings_fuzzy_phrase_iterator(
-                    fuzzy_doc,
-                    |tid| postings.get(*tid as usize).map(PostingList::view),
-                    is_active,
+                    fuzzy_doc, views, is_active,
                 ))
             }
         }
@@ -347,9 +367,9 @@ impl ImmutableInvertedIndex {
         match &self.postings {
             ImmutablePostings::Ids(_) => false,
             ImmutablePostings::WithPositions(postings) => {
-                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, |tid| {
-                    postings.get(*tid as usize).map(PostingList::view)
-                })
+                let all_tokens = fuzzy_doc.all_tokens();
+                let views = get_existing(postings, all_tokens.tokens());
+                check_compressed_postings_fuzzy_phrase(fuzzy_doc, point_id, views)
             }
         }
     }
