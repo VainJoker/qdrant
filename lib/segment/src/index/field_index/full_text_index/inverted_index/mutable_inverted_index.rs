@@ -7,7 +7,7 @@ use itertools::Either;
 
 use super::posting_list::PostingList;
 use super::postings_iterator::{intersect_postings_iterator, merge_postings_iterator};
-use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::OperationResult;
 
 #[cfg_attr(test, derive(Clone))]
@@ -107,6 +107,117 @@ impl MutableInvertedIndex {
             });
 
         Box::new(iter)
+    }
+
+    /// Iterate over point ids whose documents match all fuzzy token groups.
+    ///
+    /// Strategy: drive candidates from the group whose posting-list union is
+    /// smallest, then verify the remaining groups per candidate.  This avoids
+    /// merging k×n posting lists (all_tokens) and instead merges only n lists
+    /// (the smallest group), dramatically reducing the candidate set for
+    /// multi-token queries.
+    fn filter_fuzzy_all_tokens(
+        &self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + '_> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+
+        // Find the group whose token-posting union is smallest; bail out if
+        // any group has no postings at all (→ guaranteed zero results).
+        let mut smallest_idx = 0;
+        let mut smallest_size = usize::MAX;
+        for (i, group) in fuzzy_doc.iter().enumerate() {
+            let total: usize = group
+                .tokens()
+                .iter()
+                .filter_map(|&tid| self.postings.get(tid as usize))
+                .map(PostingList::len)
+                .sum();
+            if total == 0 {
+                return Box::new(std::iter::empty());
+            }
+            if total < smallest_size {
+                smallest_size = total;
+                smallest_idx = i;
+            }
+        }
+
+        let candidate_postings: Vec<&PostingList> = fuzzy_doc.groups()[smallest_idx]
+            .tokens()
+            .iter()
+            .filter_map(|&tid| self.postings.get(tid as usize))
+            .collect();
+
+        let iter = merge_postings_iterator(candidate_postings).filter(move |&point_id| {
+            let Some(doc) = self.get_tokens(point_id) else {
+                return false;
+            };
+            fuzzy_doc.iter().all(|group| doc.has_any(group))
+        });
+        Box::new(iter)
+    }
+
+    /// Iterate over point ids whose documents match a fuzzy phrase.
+    ///
+    /// Same smallest-group-driver strategy as [`Self::filter_fuzzy_all_tokens`].
+    fn filter_fuzzy_phrase(
+        &self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> Box<dyn Iterator<Item = PointOffsetType> + '_> {
+        if fuzzy_doc.is_empty() {
+            return Box::new(std::iter::empty());
+        }
+        let Some(point_to_doc) = self.point_to_doc.as_ref() else {
+            return Box::new(std::iter::empty());
+        };
+
+        let mut smallest_idx = 0;
+        let mut smallest_size = usize::MAX;
+        for (i, group) in fuzzy_doc.iter().enumerate() {
+            let total: usize = group
+                .tokens()
+                .iter()
+                .filter_map(|&tid| self.postings.get(tid as usize))
+                .map(PostingList::len)
+                .sum();
+            if total == 0 {
+                return Box::new(std::iter::empty());
+            }
+            if total < smallest_size {
+                smallest_size = total;
+                smallest_idx = i;
+            }
+        }
+
+        let candidate_postings: Vec<&PostingList> = fuzzy_doc.groups()[smallest_idx]
+            .tokens()
+            .iter()
+            .filter_map(|&tid| self.postings.get(tid as usize))
+            .collect();
+
+        let iter = merge_postings_iterator(candidate_postings).filter(move |&point_id| {
+            point_to_doc
+                .get(point_id as usize)
+                .and_then(|d| d.as_ref())
+                .is_some_and(|doc| fuzzy_doc.matches_document(doc))
+        });
+        Box::new(iter)
+    }
+
+    fn check_fuzzy_all_tokens(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        let Some(doc) = self.get_tokens(point_id) else {
+            return false;
+        };
+        fuzzy_doc.iter().all(|group| doc.has_any(group))
+    }
+
+    fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        let Some(doc) = self.get_document(point_id) else {
+            return false;
+        };
+        fuzzy_doc.matches_document(doc)
     }
 }
 
