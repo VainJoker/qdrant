@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use common::types::PointOffsetType;
 use common::universal_io::UniversalRead;
 
+use super::super::fuzzy_index::ImmutableFuzzyIndex;
 use super::super::inverted_index::InvertedIndex;
 use super::super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 use super::super::on_disk_text_index::OnDiskFullTextIndex;
@@ -14,18 +15,27 @@ impl<S: UniversalRead> ImmutableFullTextIndex<S> {
     /// Open and load the immutable full text index from on-disk storage.
     pub fn load_from_on_disk(index: OnDiskFullTextIndex<S>) -> OperationResult<Self> {
         let inverted_index = ImmutableInvertedIndex::try_from(&index.inverted_index)?;
+        let fuzzy_index = match index.fuzzy_index.as_ref() {
+            Some(fuzzy_index) => Some(ImmutableFuzzyIndex::try_from(fuzzy_index)?),
+            None => None,
+        };
 
         // Index is now loaded into memory, clear cache of backing on-disk storage
-        if let Err(err) = index.inverted_index.clear_cache() {
+        if let Err(err) = index.clear_cache() {
             log::warn!("Failed to clear cache of on-disk full text index: {err}");
         }
 
         let mut result = Self {
             inverted_index,
+            fuzzy_index,
             storage: index,
             cached_ram_usage_bytes: 0,
         };
-        result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes();
+        result.cached_ram_usage_bytes = result.inverted_index.ram_usage_bytes()
+            + result
+                .fuzzy_index
+                .as_ref()
+                .map_or(0, ImmutableFuzzyIndex::ram_usage_bytes);
         Ok(result)
     }
 

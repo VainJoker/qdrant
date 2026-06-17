@@ -5,6 +5,7 @@ mod mmap_fst;
 use std::path::PathBuf;
 
 use common::fs::clear_disk_cache;
+use common::universal_io::Populate;
 use fst::{IntoStreamer, Streamer};
 pub use mmap_fst::MmapFst;
 use strsim::levenshtein;
@@ -31,15 +32,7 @@ impl OnDiskFuzzyIndex {
         Ok(())
     }
 
-    pub fn open(
-        path: PathBuf,
-        populate: bool,
-        enable_fuzzy: bool,
-    ) -> OperationResult<Option<Self>> {
-        if !enable_fuzzy {
-            return Ok(None);
-        }
-
+    pub fn open(path: PathBuf, populate: Populate) -> OperationResult<Option<Self>> {
         let fuzzy_index_path = path.join(FUZZY_INDEX_FILE);
         if !fuzzy_index_path.is_file() {
             return Ok(None);
@@ -61,8 +54,9 @@ impl OnDiskFuzzyIndex {
         self.index.fst_bytes()
     }
 
-    pub fn populate(&self) {
+    pub fn populate(&self) -> OperationResult<()> {
         self.index.populate();
+        Ok(())
     }
 
     /// Drop disk cache.

@@ -1,5 +1,6 @@
 use common::universal_io::{MmapFile, UniversalRead};
 
+use super::fuzzy_index::ImmutableFuzzyIndex;
 use super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 use super::on_disk_text_index::OnDiskFullTextIndex;
 
@@ -8,6 +9,7 @@ mod read_ops;
 
 pub struct ImmutableFullTextIndex<S: UniversalRead = MmapFile> {
     pub(super) inverted_index: ImmutableInvertedIndex,
+    pub(super) fuzzy_index: Option<ImmutableFuzzyIndex>,
     /// Backing mmap storage; source of state, persists deletions.
     pub(super) storage: OnDiskFullTextIndex<S>,
     /// Snapshot of approximate RAM usage at construction time.

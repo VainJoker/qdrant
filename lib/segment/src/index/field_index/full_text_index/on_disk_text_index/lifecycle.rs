@@ -8,6 +8,7 @@ use fs_err as fs;
 use serde_json::Value;
 
 use super::super::FullTextIndex;
+use super::super::fuzzy_index::{ImmutableFuzzyIndex, OnDiskFuzzyIndex};
 use super::super::immutable_text_index::ImmutableFullTextIndex;
 use super::super::inverted_index::immutable_inverted_index::ImmutableInvertedIndex;
 use super::super::inverted_index::mutable_inverted_index::MutableInvertedIndex;
@@ -18,6 +19,7 @@ use super::{FullTextMmapIndexBuilder, OnDiskFullTextIndex};
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
+use crate::index::field_index::full_text_index::fuzzy_index;
 use crate::index::field_index::{FieldIndexBuilderTrait, ValueIndexer};
 
 impl<S: UniversalRead> OnDiskFullTextIndex<S> {
@@ -31,10 +33,26 @@ impl<S: UniversalRead> OnDiskFullTextIndex<S> {
         let has_positions = config.phrase_matching == Some(true);
         let tokenizer = Tokenizer::new_from_text_index_params(&config);
 
-        let inverted_index =
-            OnDiskInvertedIndex::<S>::open(fs, path, populate, has_positions, deleted_points)?;
-        Ok(inverted_index.map(|inverted_index| Self {
+        let Some(inverted_index) = OnDiskInvertedIndex::<S>::open(
+            fs,
+            path.clone(),
+            populate,
+            has_positions,
+            deleted_points,
+        )?
+        else {
+            return Ok(None);
+        };
+
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            OnDiskFuzzyIndex::open(path, populate)
+        } else {
+            Ok(None)
+        }?;
+
+        Ok(Some(Self {
             inverted_index,
+            fuzzy_index,
             tokenizer,
         }))
     }
@@ -61,20 +79,34 @@ impl<S: UniversalRead> OnDiskFullTextIndex<S> {
 
     pub fn populate(&self) -> OperationResult<()> {
         self.inverted_index.populate()?;
+        if let Some(fuzzy_index) = &self.fuzzy_index {
+            fuzzy_index.populate()?;
+        }
         Ok(())
     }
 
     pub fn clear_cache(&self) -> OperationResult<()> {
         self.inverted_index.clear_cache()?;
+        if let Some(fuzzy_index) = &self.fuzzy_index {
+            fuzzy_index.clear_cache()?;
+        }
         Ok(())
     }
 
     pub fn files(&self) -> Vec<PathBuf> {
-        self.inverted_index.files()
+        let mut files = self.inverted_index.files();
+        if let Some(fuzzy_index) = &self.fuzzy_index {
+            files.extend(fuzzy_index.files());
+        }
+        files
     }
 
     pub fn immutable_files(&self) -> Vec<PathBuf> {
-        self.inverted_index.immutable_files()
+        let mut files = self.inverted_index.immutable_files();
+        if let Some(fuzzy_index) = &self.fuzzy_index {
+            files.extend(fuzzy_index.immutable_files());
+        }
+        files
     }
 }
 
@@ -190,6 +222,27 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
         OnDiskInvertedIndex::create(path.clone(), &immutable)?;
 
         let populate = Populate::from(!is_on_disk);
+
+        let fuzzy_index = if config.fuzzy_matching.unwrap_or_default() {
+            let mut terms: Vec<&str> = immutable.vocab.keys().map(String::as_str).collect();
+            terms.sort_unstable();
+
+            let immutable_fuzzy_index =
+                ImmutableFuzzyIndex::build_from_sorted_terms(terms.into_iter())?;
+
+            OnDiskFuzzyIndex::create(path.clone(), &immutable_fuzzy_index)?;
+
+            Some(
+                OnDiskFuzzyIndex::open(path.clone(), populate)?.ok_or_else(|| {
+                    OperationError::service_error(
+                        "Failed to open MmapFuzzyIndex that was just created",
+                    )
+                })?,
+            )
+        } else {
+            None
+        };
+
         let has_positions = config.phrase_matching.unwrap_or_default();
         let inverted_index =
             OnDiskInvertedIndex::open(&MmapFs, path, populate, has_positions, &deleted_points)?
@@ -201,6 +254,7 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
 
         let on_disk_index = OnDiskFullTextIndex {
             inverted_index,
+            fuzzy_index,
             tokenizer,
         };
 
