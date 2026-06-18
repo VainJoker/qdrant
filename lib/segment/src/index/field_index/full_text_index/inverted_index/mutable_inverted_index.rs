@@ -116,7 +116,7 @@ impl MutableInvertedIndex {
     /// merging k×n posting lists (all_tokens) and instead merges only n lists
     /// (the smallest group), dramatically reducing the candidate set for
     /// multi-token queries.
-    fn filter_fuzzy_all_tokens(
+    fn filter_has_all_fuzzy(
         &self,
         fuzzy_doc: FuzzyDocument,
     ) -> Box<dyn Iterator<Item = PointOffsetType> + '_> {
@@ -161,8 +161,8 @@ impl MutableInvertedIndex {
 
     /// Iterate over point ids whose documents match a fuzzy phrase.
     ///
-    /// Same smallest-group-driver strategy as [`Self::filter_fuzzy_all_tokens`].
-    fn filter_fuzzy_phrase(
+    /// Same smallest-group-driver strategy as [`Self::filter_has_all_fuzzy`].
+    fn filter_has_phrase_fuzzy(
         &self,
         fuzzy_doc: FuzzyDocument,
     ) -> Box<dyn Iterator<Item = PointOffsetType> + '_> {
@@ -206,14 +206,14 @@ impl MutableInvertedIndex {
         Box::new(iter)
     }
 
-    fn check_fuzzy_all_tokens(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+    fn check_has_all_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
         let Some(doc) = self.get_tokens(point_id) else {
             return false;
         };
         fuzzy_doc.iter().all(|group| doc.has_any(group))
     }
 
-    fn check_fuzzy_phrase(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+    fn check_has_phrase_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
         let Some(doc) = self.get_document(point_id) else {
             return false;
         };

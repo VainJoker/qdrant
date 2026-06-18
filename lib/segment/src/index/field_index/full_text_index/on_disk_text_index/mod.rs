@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use common::bitvec::BitVec;
 use common::universal_io::{MmapFile, UniversalRead};
 
-use super::fuzzy_index::{MutableFuzzyIndex, OnDiskFuzzyIndex};
+use super::fuzzy_index::OnDiskFuzzyIndex;
 use super::inverted_index::mutable_inverted_index::MutableInvertedIndex;
 use super::inverted_index::on_disk_inverted_index::OnDiskInvertedIndex;
 use super::tokenizers::Tokenizer;

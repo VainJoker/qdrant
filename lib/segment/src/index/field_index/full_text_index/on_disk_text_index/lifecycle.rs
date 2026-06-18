@@ -19,7 +19,6 @@ use super::{FullTextMmapIndexBuilder, OnDiskFullTextIndex};
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
-use crate::index::field_index::full_text_index::fuzzy_index;
 use crate::index::field_index::{FieldIndexBuilderTrait, ValueIndexer};
 
 impl<S: UniversalRead> OnDiskFullTextIndex<S> {

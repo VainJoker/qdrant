@@ -181,28 +181,29 @@ pub fn check_compressed_postings_phrase(
 pub fn check_compressed_postings_fuzzy_phrase<'a>(
     phrase: &FuzzyDocument,
     point_id: PointOffsetType,
-    postings: Vec<(TokenId, PostingListView<'a, Positions>)>,
+    group_postings: Vec<Vec<(TokenId, PostingListView<'a, Positions>)>>,
 ) -> bool {
-    // Build a lookup from token_id to its posting iterator.
-    let mut posting_map: Vec<(TokenId, PostingIterator<'a, Positions>)> = postings
+    let mut group_iters: Vec<Vec<(TokenId, PostingIterator<'a, Positions>)>> = group_postings
         .into_iter()
-        .map(|(tid, pl)| (tid, pl.into_iter()))
+        .map(|group| {
+            group
+                .into_iter()
+                .map(|(token_id, posting)| (token_id, posting.into_iter()))
+                .collect()
+        })
         .collect();
 
     let mut tokens_positions: Vec<TokenPosition> = Vec::new();
 
-    for group in phrase.iter() {
+    for group_iter in &mut group_iters {
         let before = tokens_positions.len();
 
-        for &token_id in group.tokens() {
-            // Find the posting iterator for this token_id.
-            if let Some((_, iter)) = posting_map.iter_mut().find(|(tid, _)| *tid == token_id) {
-                let Some(elem) = iter.advance_until_greater_or_equal(point_id) else {
-                    continue;
-                };
-                if elem.id == point_id {
-                    tokens_positions.extend(elem.value.to_token_positions(token_id));
-                }
+        for (token_id, iter) in group_iter {
+            let Some(elem) = iter.advance_until_greater_or_equal(point_id) else {
+                continue;
+            };
+            if elem.id == point_id {
+                tokens_positions.extend(elem.value.to_token_positions(*token_id));
             }
         }
 
@@ -216,6 +217,19 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
 
     PartialDocument::new(tokens_positions).has_fuzzy_phrase(phrase)
 }
+
+struct GroupPositionPostingViews<'a> {
+    total_len: usize,
+    views: Vec<(TokenId, PostingListView<'a, Positions>)>,
+}
+
+impl<'a> GroupPositionPostingViews<'a> {
+    fn new(views: Vec<(TokenId, PostingListView<'a, Positions>)>) -> Self {
+        let total_len = views.iter().map(|(_, view)| view.len()).sum();
+        Self { total_len, views }
+    }
+}
+
 /// Returns an iterator over points whose documents satisfy the fuzzy phrase query.
 ///
 /// Uses stateful peekable iterators (via [`PostingIterator::advance_until_greater_or_equal`])
@@ -224,58 +238,46 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
 /// the monotonically increasing candidate stream.
 pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
     phrase: FuzzyDocument,
-    postings: Vec<(TokenId, PostingListView<'a, Positions>)>,
+    group_postings: Vec<Vec<(TokenId, PostingListView<'a, Positions>)>>,
     is_active: impl Fn(PointOffsetType) -> bool + 'a,
 ) -> impl Iterator<Item = PointOffsetType> + 'a {
-    if phrase.is_empty() {
+    let mut group_views: Vec<_> = group_postings
+        .into_iter()
+        .map(GroupPositionPostingViews::new)
+        .collect();
+    if phrase.is_empty()
+        || group_views.is_empty()
+        || group_views.iter().any(|group| group.views.is_empty())
+    {
         return Either::Left(std::iter::empty());
     }
 
-    // Partition the flat postings Vec into per-group posting views.
-    let mut group_postings: Vec<Vec<(TokenId, PostingListView<'a, Positions>)>> =
-        Vec::with_capacity(phrase.len());
-    // Build a lookup set for quick membership tests.
-    let posting_map: Vec<(TokenId, PostingListView<'a, Positions>)> = postings;
-    for group in phrase.iter() {
-        let views: Vec<_> = group
-            .tokens()
-            .iter()
-            .filter_map(|&tid| {
-                posting_map
-                    .iter()
-                    .find(|(t, _)| *t == tid)
-                    .map(|(t, pl)| (*t, pl.clone()))
-            })
-            .collect();
-        group_postings.push(views);
-    }
-
-    if group_postings.iter().any(|views| views.is_empty()) {
-        return Either::Left(std::iter::empty());
-    }
-
-    let smallest_candidate_group_idx = group_postings
+    let smallest_candidate_group_idx = group_views
         .iter()
         .enumerate()
-        .min_by_key(|(_, views)| views.iter().map(|(_, pl)| pl.len()).sum::<usize>())
+        .min_by_key(|(_, group)| group.total_len)
         .map(|(idx, _)| idx)
         .unwrap();
 
     // Clone is cheap here: PostingListView holds only slice references (pointer+length).
-    let smallest_candidate_views: Vec<PostingListView<'a, Positions>> = group_postings
+    let smallest_candidate_views: Vec<PostingListView<'a, Positions>> = group_views
         [smallest_candidate_group_idx]
+        .views
         .iter()
         .map(|(_, pl)| pl.clone())
         .collect();
+
+    group_views.sort_unstable_by_key(|group| group.total_len);
 
     // Consume group_postings into one set of stateful iterators covering ALL groups.
     // advance_until_greater_or_equal has seek+peek semantics: it positions the cursor
     // at the first element >= target without consuming it, so the iterator retains its
     // position for the next candidate in the monotonically increasing stream.
-    let mut group_iters: Vec<Vec<(TokenId, PostingIterator<'a, Positions>)>> = group_postings
+    let mut group_iters: Vec<Vec<(TokenId, PostingIterator<'a, Positions>)>> = group_views
         .into_iter()
         .map(|group| {
             group
+                .views
                 .into_iter()
                 .map(|(tid, pl)| (tid, pl.into_iter()))
                 .collect()
@@ -311,72 +313,89 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
     )
 }
 
+struct GroupPostingViews<'a, V: PostingValue> {
+    total_len: usize,
+    views: Vec<PostingListView<'a, V>>,
+}
+
+impl<'a, V: PostingValue> GroupPostingViews<'a, V> {
+    fn new(views: Vec<PostingListView<'a, V>>) -> Self {
+        let total_len = views.iter().map(|view| view.len()).sum();
+        Self { total_len, views }
+    }
+}
+
+struct MaterializedPostingUnion {
+    ids: Vec<PointOffsetType>,
+    offset: usize,
+}
+
+impl MaterializedPostingUnion {
+    fn new<'a, V: PostingValue + 'a>(views: Vec<PostingListView<'a, V>>) -> Self {
+        let ids = views
+            .into_iter()
+            .map(|view| view.into_iter().map(|elem| elem.id))
+            .kmerge_by(|a, b| a < b)
+            .dedup()
+            .collect();
+        Self { ids, offset: 0 }
+    }
+
+    fn contains(&mut self, point_id: PointOffsetType) -> bool {
+        while self
+            .ids
+            .get(self.offset)
+            .is_some_and(|&current_id| current_id < point_id)
+        {
+            self.offset += 1;
+        }
+
+        self.ids
+            .get(self.offset)
+            .is_some_and(|&current_id| current_id == point_id)
+    }
+}
+
 /// Returns an iterator that yields every active point in which **every group** of the
 /// fuzzy document has at least one matching token.
 ///
 /// Strategy: per-group union → cross-group intersect.
-/// 1. For each group collect posting views from the provided `postings` Vec;
-///    bail out early if any group has no postings.
-/// 2. Pick the group with the smallest union size as the candidate driver.
-/// 3. For every candidate, verify it appears in every other group's union using
-///    stateful peekable iterators (seek+peek via `advance_until_greater_or_equal`).
-pub fn merge_fuzzy_all_tokens_iterator<'a, V: PostingValue + 'a>(
-    fuzzy_doc: FuzzyDocument,
-    postings: Vec<(TokenId, PostingListView<'a, V>)>,
+/// 1. Bail out early if any group has no postings.
+/// 2. Pick the group with the smallest total posting size as the candidate driver.
+/// 3. Materialize the union of every other group once.
+/// 4. For every candidate, verify it appears in every other group's union.
+pub fn intersect_compressed_postings_fuzzy_all_iterator<'a, V: PostingValue + 'a>(
+    group_postings: Vec<Vec<PostingListView<'a, V>>>,
     is_active: impl Fn(PointOffsetType) -> bool + 'a,
-) -> Box<dyn Iterator<Item = PointOffsetType> + 'a> {
-    // Partition the flat postings Vec into per-group posting views.
-    let mut group_views: Vec<Vec<PostingListView<'a, V>>> = Vec::with_capacity(fuzzy_doc.len());
-    for group in fuzzy_doc.iter() {
-        let views: Vec<PostingListView<'a, V>> = group
-            .tokens()
-            .iter()
-            .filter_map(|&tid| {
-                postings
-                    .iter()
-                    .find(|(t, _)| *t == tid)
-                    .map(|(_, pl)| pl.clone())
-            })
-            .collect();
-        if views.is_empty() {
-            return Box::new(std::iter::empty());
-        }
-        group_views.push(views);
-    }
-    if group_views.is_empty() {
-        return Box::new(std::iter::empty());
+) -> impl Iterator<Item = PointOffsetType> + 'a {
+    let mut group_views: Vec<_> = group_postings
+        .into_iter()
+        .map(GroupPostingViews::new)
+        .collect();
+    if group_views.is_empty() || group_views.iter().any(|group| group.views.is_empty()) {
+        return Either::Left(std::iter::empty());
     }
 
-    // Drive candidates from the group with the smallest union posting size.
     let smallest_idx = group_views
         .iter()
         .enumerate()
-        .min_by_key(|(_, views)| views.iter().map(|v| v.len()).sum::<usize>())
+        .min_by_key(|(_, group)| group.total_len)
         .map(|(idx, _)| idx)
         .unwrap();
-    let candidate_views = group_views.swap_remove(smallest_idx);
-    // group_views now holds only the "other" groups.
+    let candidate_views = group_views.swap_remove(smallest_idx).views;
 
-    // Sort the remaining groups by ascending total union size so that .all() fails fast
-    // on the most selective (smallest) group first.
-    group_views.sort_unstable_by_key(|views| views.iter().map(|v| v.len()).sum::<usize>());
+    group_views.sort_unstable_by_key(|group| group.total_len);
 
-    let mut other_group_iters: Vec<Vec<PostingIterator<'a, V>>> = group_views
+    let mut other_group_unions: Vec<_> = group_views
         .into_iter()
-        .map(|mut views| {
-            views.sort_unstable_by_key(|v| std::cmp::Reverse(v.len()));
-            views.into_iter().map(|v| v.into_iter()).collect()
-        })
+        .map(|group| MaterializedPostingUnion::new(group.views))
         .collect();
 
-    Box::new(
+    Either::Right(
         merge_compressed_postings_iterator(candidate_views, is_active).filter(move |&point_id| {
-            other_group_iters.iter_mut().all(|iters| {
-                iters.iter_mut().any(|iter| {
-                    iter.advance_until_greater_or_equal(point_id)
-                        .is_some_and(|elem| elem.id == point_id)
-                })
-            })
+            other_group_unions
+                .iter_mut()
+                .all(|group| group.contains(point_id))
         }),
     )
 }
