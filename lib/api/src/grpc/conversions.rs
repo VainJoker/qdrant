@@ -2119,6 +2119,10 @@ impl From<segment::types::Match> for Match {
             segment::types::Match::Phrase(segment::types::MatchPhrase { phrase }) => {
                 MatchValue::Phrase(phrase)
             }
+            segment::types::Match::Fuzzy(segment::types::MatchFuzzy { fuzzy: _fuzzy }) => {
+                // TODO: need grpc declaration
+                todo!()
+            }
             segment::types::Match::Any(any) => match any.any {
                 segment::types::AnyVariants::Strings(strings) => {
                     let strings = strings.into_iter().collect();

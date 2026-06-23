@@ -304,7 +304,8 @@ pub(super) fn condition_checker<'a, N: BoolIndexRead>(
         })
         | Match::Text(_)
         | Match::TextAny(_)
-        | Match::Phrase(_) => None,
+        | Match::Phrase(_)
+        | Match::Fuzzy(_) => None,
     }
 }
 

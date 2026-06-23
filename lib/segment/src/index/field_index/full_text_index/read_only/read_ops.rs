@@ -4,6 +4,7 @@ use common::types::PointOffsetType;
 use common::universal_io::{UniversalRead, UserData};
 
 use super::super::full_text_index_read::FullTextIndexRead;
+use super::super::fuzzy_index::FuzzyIndex;
 use super::super::inverted_index::{ParsedQuery, TokenId};
 use super::super::read_ops;
 use super::super::tokenizers::Tokenizer;
@@ -112,6 +113,14 @@ impl<S: UniversalRead> FullTextIndexRead for ReadOnlyFullTextIndex<S> {
             ReadOnlyFullTextIndex::Appendable(index) => index.check_match(query, point_id),
             ReadOnlyFullTextIndex::OnDisk(index) => index.check_match(query, point_id),
             ReadOnlyFullTextIndex::Immutable(index) => index.check_match(query, point_id),
+        }
+    }
+
+    fn fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        match self {
+            ReadOnlyFullTextIndex::Appendable(index) => index.fuzzy_index(),
+            ReadOnlyFullTextIndex::OnDisk(index) => index.fuzzy_index(),
+            ReadOnlyFullTextIndex::Immutable(index) => index.fuzzy_index(),
         }
     }
 
