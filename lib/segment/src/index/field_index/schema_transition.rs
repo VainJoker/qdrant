@@ -147,6 +147,7 @@ mod tests {
             lowercase: None,
             ascii_folding: None,
             phrase_matching: None,
+            fuzzy_matching: None,
             stopwords: None,
             on_disk,
             stemmer: None,

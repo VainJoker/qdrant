@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use common::mmap::{Advice, AdviceSetting, Madviseable, open_read_mmap};
+use common::universal_io::Populate;
 use fs_err::File;
 use fst::Set;
 use fst::raw::Fst;
@@ -43,8 +44,9 @@ impl MmapFst {
         Ok(())
     }
 
-    pub fn open(path: impl Into<PathBuf>, populate: bool) -> io::Result<Self> {
+    pub fn open(path: impl Into<PathBuf>, populate: Populate) -> io::Result<Self> {
         let path = path.into();
+        let populate = matches!(populate, Populate::Blocking | Populate::PreferBackground);
         let mmap = open_read_mmap(&path, AdviceSetting::Advice(Advice::Normal), populate)?;
 
         let fst = Set::new(mmap).map_err(|_| {

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::BitOrAssign;
 use std::path::PathBuf;
 
+use ahash::AHashMap;
 use common::bitvec::{BitSlice, BitSliceExt, BitVec};
 use common::counter::hardware_counter::HardwareCounterCell;
 use common::fs::clear_disk_cache;
@@ -27,10 +28,13 @@ use super::postings_iterator::{
 use super::{InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
-use crate::index::field_index::full_text_index::inverted_index::Document;
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
-    check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
+    check_compressed_postings_fuzzy_phrase, check_compressed_postings_phrase,
+    intersect_compressed_postings_fuzzy_all_iterator,
+    intersect_compressed_postings_fuzzy_phrase_iterator,
+    intersect_compressed_postings_phrase_iterator,
 };
+use crate::index::field_index::full_text_index::inverted_index::{Document, FuzzyDocument};
 
 mod create_postings;
 mod on_disk_postings;
@@ -458,6 +462,184 @@ impl<S: UniversalRead> OnDiskInvertedIndex<S> {
             }
             // cannot do phrase matching if there's no positional information
             OnDiskPostingsEnum::Ids(_postings) => Ok(false),
+        }
+    }
+
+    fn filter_has_all_fuzzy<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> OperationResult<Vec<PointOffsetType>> {
+        let is_active = move |idx: PointOffsetType| self.is_active(idx);
+
+        fn intersection<V: ZerocopyPostingValue, S: UniversalRead>(
+            postings: &OnDiskPostings<V, S>,
+            fuzzy_doc: FuzzyDocument,
+            is_active: impl Fn(PointOffsetType) -> bool,
+        ) -> OperationResult<Vec<PointOffsetType>> {
+            let all_tokens: Vec<TokenId> = fuzzy_doc
+                .iter()
+                .flat_map(|group| group.tokens().iter().copied())
+                .collect();
+
+            postings.with_existing_postings(&all_tokens, |posting_readers| {
+                let posting_by_token: AHashMap<_, _> = posting_readers.into_iter().collect();
+
+                let grouped_postings = fuzzy_doc
+                    .iter()
+                    .map(|group| {
+                        group
+                            .tokens()
+                            .iter()
+                            .filter_map(|token_id| posting_by_token.get(token_id).cloned())
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+
+                Ok(
+                    intersect_compressed_postings_fuzzy_all_iterator(grouped_postings, is_active)
+                        .collect(),
+                )
+            })
+        }
+
+        match &self.storage.postings {
+            OnDiskPostingsEnum::Ids(postings) => intersection(postings, fuzzy_doc, is_active),
+            OnDiskPostingsEnum::WithPositions(postings) => {
+                intersection(postings, fuzzy_doc, is_active)
+            }
+        }
+    }
+
+    fn filter_has_phrase_fuzzy<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> OperationResult<Vec<PointOffsetType>> {
+        if fuzzy_doc.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        match &self.storage.postings {
+            OnDiskPostingsEnum::Ids(_) => Ok(Vec::new()),
+            OnDiskPostingsEnum::WithPositions(postings) => {
+                let is_active = move |idx: PointOffsetType| self.is_active(idx);
+
+                let all_tokens: Vec<TokenId> = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+
+                postings.with_existing_postings(&all_tokens, |posting_readers| {
+                    let posting_by_token: AHashMap<_, _> = posting_readers.into_iter().collect();
+
+                    let group_postings = fuzzy_doc
+                        .iter()
+                        .map(|group| {
+                            group
+                                .tokens()
+                                .iter()
+                                .filter_map(|token_id| {
+                                    posting_by_token
+                                        .get(token_id)
+                                        .map(|view| (*token_id, view.clone()))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+
+                    Ok(intersect_compressed_postings_fuzzy_phrase_iterator(
+                        fuzzy_doc,
+                        group_postings,
+                        is_active,
+                    )
+                    .collect())
+                })
+            }
+        }
+    }
+
+    fn check_has_all_fuzzy(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        point_id: PointOffsetType,
+    ) -> OperationResult<bool> {
+        if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
+            return Ok(false);
+        }
+
+        fn check_any<V: ZerocopyPostingValue, S: UniversalRead>(
+            postings: &OnDiskPostings<V, S>,
+            tokens: &TokenSet,
+            point_id: PointOffsetType,
+        ) -> OperationResult<bool> {
+            postings.with_existing_postings(tokens.tokens(), |all_postings| {
+                Ok(all_postings
+                    .into_iter()
+                    .any(|(_token_id, posting)| posting.visitor().contains(point_id)))
+            })
+        }
+
+        match &self.storage.postings {
+            OnDiskPostingsEnum::Ids(postings) => {
+                for group in fuzzy_doc.iter() {
+                    if group.is_empty() || !check_any(postings, group, point_id)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+            OnDiskPostingsEnum::WithPositions(postings) => {
+                for group in fuzzy_doc.iter() {
+                    if group.is_empty() || !check_any(postings, group, point_id)? {
+                        return Ok(false);
+                    }
+                }
+                Ok(true)
+            }
+        }
+    }
+
+    fn check_has_phrase_fuzzy(
+        &self,
+        fuzzy_doc: &FuzzyDocument,
+        point_id: PointOffsetType,
+    ) -> OperationResult<bool> {
+        if !self.is_active(point_id) {
+            return Ok(false);
+        }
+
+        match &self.storage.postings {
+            OnDiskPostingsEnum::Ids(_) => Ok(false),
+            OnDiskPostingsEnum::WithPositions(postings) => {
+                let all_tokens: Vec<TokenId> = fuzzy_doc
+                    .iter()
+                    .flat_map(|group| group.tokens().iter().copied())
+                    .collect();
+
+                postings.with_existing_postings(&all_tokens, |posting_readers| {
+                    let posting_by_token: AHashMap<_, _> = posting_readers.into_iter().collect();
+
+                    let group_postings = fuzzy_doc
+                        .iter()
+                        .map(|group| {
+                            group
+                                .tokens()
+                                .iter()
+                                .filter_map(|token_id| {
+                                    posting_by_token
+                                        .get(token_id)
+                                        .map(|view| (*token_id, view.clone()))
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .collect::<Vec<_>>();
+
+                    Ok(check_compressed_postings_fuzzy_phrase(
+                        fuzzy_doc,
+                        point_id,
+                        group_postings,
+                    ))
+                })
+            }
         }
     }
 
