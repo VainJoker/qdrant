@@ -115,6 +115,8 @@ message Match {
     string phrase = 9;
     // Match any word in the text
     string text_any = 10;
+    // Match multiple fuzzy clauses with independent parameters
+    FuzzyMatch fuzzy = 11;
   }
 }
 
@@ -174,4 +176,28 @@ message ValuesCount {
   optional uint64 gt = 2;
   optional uint64 gte = 3;
   optional uint64 lte = 4;
+}
+
+// Parameters for fuzzy matching
+message FuzzyParams {
+  // Maximum edit distance (Levenshtein). 0..=2, default 0.
+  optional uint32 max_edits = 1;
+  // Number of initial characters that must match exactly. Default 0.
+  optional uint32 prefix_length = 2;
+  // Maximum number of terms to expand per token. Default 30, capped at 30.
+  optional uint32 max_expansions = 3;
+}
+
+// Fuzzy text match
+message FuzzyMatch {
+  oneof value {
+    // Text to match
+    string text = 1;
+    // Phrase to match
+    string phrase = 2;
+    // Text (any word) to match
+    string text_any = 3;
+  }
+  // Fuzzy matching parameters
+  optional FuzzyParams params = 4;
 }

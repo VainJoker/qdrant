@@ -243,7 +243,12 @@ fn infer_index_from_field_condition(field_condition: &FieldCondition) -> Vec<Fie
             Match::Any(match_any) => infer_index_from_any_variants(&match_any.any),
             Match::Except(match_except) => infer_index_from_any_variants(&match_except.except),
             Match::TextAny(_match_text_any) => vec![FieldIndexType::Text],
-            Match::Fuzzy(_match_fuzzy) => vec![FieldIndexType::TextFuzzy],
+            Match::Fuzzy(match_fuzzy) => match &match_fuzzy.fuzzy {
+                segment::types::Fuzzy::Text { .. } | segment::types::Fuzzy::TextAny { .. } => {
+                    vec![FieldIndexType::TextFuzzy]
+                }
+                segment::types::Fuzzy::Phrase { .. } => vec![FieldIndexType::TextPhraseFuzzy],
+            },
         })
     }
     if let Some(range_interface) = range {
@@ -553,6 +558,7 @@ enum FieldIndexType {
     Text,
     TextPhrase,
     TextFuzzy,
+    TextPhraseFuzzy,
     BoolMatch,
     UuidMatch,
     UuidRange,
@@ -603,13 +609,18 @@ fn schema_capabilities(value: &PayloadFieldSchema) -> HashSet<FieldIndexType> {
             PayloadSchemaParams::Float(_) => index_types.insert(FieldIndexType::FloatRange),
             PayloadSchemaParams::Geo(_) => index_types.insert(FieldIndexType::Geo),
             PayloadSchemaParams::Text(TextIndexParams {
-                phrase_matching, ..
-            }) => {
-                if phrase_matching.unwrap_or_default() {
-                    index_types.insert(FieldIndexType::TextPhrase);
-                }
-                index_types.insert(FieldIndexType::Text)
-            }
+                phrase_matching,
+                fuzzy_matching,
+                ..
+            }) => match (
+                phrase_matching.unwrap_or_default(),
+                fuzzy_matching.unwrap_or_default(),
+            ) {
+                (false, false) => index_types.insert(FieldIndexType::Text),
+                (false, true) => index_types.insert(FieldIndexType::TextFuzzy),
+                (true, false) => index_types.insert(FieldIndexType::TextPhrase),
+                (true, true) => index_types.insert(FieldIndexType::TextPhraseFuzzy),
+            },
             PayloadSchemaParams::Datetime(_) => index_types.insert(FieldIndexType::DatetimeRange),
         },
     };
@@ -641,6 +652,14 @@ impl From<FieldIndexType> for PayloadFieldSchema {
                     ..Default::default()
                 }))
             }
+            FieldIndexType::TextPhraseFuzzy => {
+                PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+                    r#type: TextIndexType::Text,
+                    fuzzy_matching: Some(true),
+                    phrase_matching: Some(true),
+                    ..Default::default()
+                }))
+            }
             FieldIndexType::BoolMatch => PayloadFieldSchema::FieldType(PayloadSchemaType::Bool),
             FieldIndexType::UuidMatch => PayloadFieldSchema::FieldType(PayloadSchemaType::Uuid),
             FieldIndexType::UuidRange => PayloadFieldSchema::FieldType(PayloadSchemaType::Uuid),
@@ -669,5 +688,38 @@ mod tests {
         let index_types = schema_capabilities(&schema);
         assert!(index_types.contains(&FieldIndexType::IntMatch));
         assert!(index_types.contains(&FieldIndexType::IntRange));
+    }
+
+    #[test]
+    fn text_index_capabilities_respect_disabled_flags() {
+        let params = PayloadSchemaParams::Text(TextIndexParams {
+            r#type: TextIndexType::Text,
+            phrase_matching: Some(false),
+            fuzzy_matching: Some(false),
+            ..Default::default()
+        });
+        let schema = PayloadFieldSchema::FieldParams(params);
+        let index_types = schema_capabilities(&schema);
+
+        assert!(index_types.contains(&FieldIndexType::Text));
+        assert!(!index_types.contains(&FieldIndexType::TextPhrase));
+        assert!(!index_types.contains(&FieldIndexType::TextFuzzy));
+        assert!(!index_types.contains(&FieldIndexType::TextPhraseFuzzy));
+    }
+
+    #[test]
+    fn fuzzy_phrase_requires_phrase_fuzzy_index() {
+        let field_condition = FieldCondition::new_match(
+            JsonPath::new("text"),
+            Match::Fuzzy(segment::types::MatchFuzzy {
+                fuzzy: segment::types::Fuzzy::Phrase {
+                    phrase: "hello world".to_string(),
+                    params: None,
+                },
+            }),
+        );
+
+        let inferred = infer_index_from_field_condition(&field_condition);
+        assert_eq!(inferred, vec![FieldIndexType::TextPhraseFuzzy]);
     }
 }
