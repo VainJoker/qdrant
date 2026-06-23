@@ -17,10 +17,13 @@ use super::positions::Positions;
 use super::postings_iterator::{
     intersect_compressed_postings_iterator, merge_compressed_postings_iterator,
 };
-use super::{Document, InvertedIndex, ParsedQuery, TokenId, TokenSet};
+use super::{Document, FuzzyDocument, InvertedIndex, ParsedQuery, TokenId, TokenSet};
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::index::field_index::full_text_index::inverted_index::postings_iterator::{
-    check_compressed_postings_phrase, intersect_compressed_postings_phrase_iterator,
+    check_compressed_postings_fuzzy_phrase, check_compressed_postings_phrase,
+    intersect_compressed_postings_fuzzy_all_iterator,
+    intersect_compressed_postings_fuzzy_phrase_iterator,
+    intersect_compressed_postings_phrase_iterator,
 };
 
 /// Collect posting-list views for every token in `token_ids`.
@@ -37,6 +40,43 @@ fn get_all_or_none<'a, V: PostingValue>(
                 .map(|list| (token_id, list.view()))
         })
         .collect()
+}
+
+fn get_grouped_existing_postings<'a, V: PostingValue>(
+    postings: &'a [PostingList<V>],
+    fuzzy_doc: &FuzzyDocument,
+) -> Vec<Vec<PostingListView<'a, V>>> {
+    let mut grouped = Vec::with_capacity(fuzzy_doc.len());
+    for group in fuzzy_doc.iter() {
+        let mut views = Vec::with_capacity(group.tokens().len());
+        for &token_id in group.tokens() {
+            if let Some(view) = postings.get(token_id as usize).map(PostingList::view) {
+                views.push(view);
+            }
+        }
+        grouped.push(views);
+    }
+    grouped
+}
+
+fn get_grouped_existing_postings_with_tokens<'a>(
+    postings: &'a [PostingList<Positions>],
+    fuzzy_doc: &FuzzyDocument,
+) -> Vec<Vec<(TokenId, PostingListView<'a, Positions>)>> {
+    let mut grouped = Vec::with_capacity(fuzzy_doc.len());
+    for group in fuzzy_doc.iter() {
+        let mut views = Vec::with_capacity(group.tokens().len());
+        for &token_id in group.tokens() {
+            if let Some(view) = postings
+                .get(token_id as usize)
+                .map(|list| (token_id, list.view()))
+            {
+                views.push(view);
+            }
+        }
+        grouped.push(views);
+    }
+    grouped
 }
 
 #[cfg_attr(test, derive(Clone))]
@@ -248,6 +288,111 @@ impl ImmutableInvertedIndex {
             }
             // cannot do phrase matching if there's no positional information
             ImmutablePostings::Ids(_postings) => false,
+        }
+    }
+
+    /// Iterate over point ids whose documents match all fuzzy token groups
+    fn filter_has_all_fuzzy<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> impl Iterator<Item = PointOffsetType> + 'a {
+        let is_active = move |idx: PointOffsetType| {
+            self.point_to_tokens_count
+                .get(idx as usize)
+                .is_some_and(|x| *x > 0)
+        };
+
+        fn intersection<'a, V: PostingValue + 'a>(
+            postings: &'a [PostingList<V>],
+            fuzzy_doc: FuzzyDocument,
+            is_active: impl Fn(PointOffsetType) -> bool + 'a,
+        ) -> impl Iterator<Item = PointOffsetType> + 'a {
+            intersect_compressed_postings_fuzzy_all_iterator(
+                get_grouped_existing_postings(postings, &fuzzy_doc),
+                is_active,
+            )
+        }
+
+        match &self.postings {
+            ImmutablePostings::Ids(postings) => {
+                Either::Left(intersection(postings, fuzzy_doc, is_active))
+            }
+            ImmutablePostings::WithPositions(postings) => {
+                Either::Right(intersection(postings, fuzzy_doc, is_active))
+            }
+        }
+    }
+
+    /// Iterate over point ids whose documents match a fuzzy phrase
+    fn filter_has_phrase_fuzzy<'a>(
+        &'a self,
+        fuzzy_doc: FuzzyDocument,
+    ) -> impl Iterator<Item = PointOffsetType> + 'a {
+        let is_active = move |idx| {
+            self.point_to_tokens_count
+                .get(idx as usize)
+                .is_some_and(|x| *x > 0)
+        };
+        match &self.postings {
+            ImmutablePostings::WithPositions(postings) => {
+                let group_postings =
+                    get_grouped_existing_postings_with_tokens(postings, &fuzzy_doc);
+                Either::Right(intersect_compressed_postings_fuzzy_phrase_iterator(
+                    fuzzy_doc,
+                    group_postings,
+                    is_active,
+                ))
+            }
+            // cannot do phrase matching if there's no positional information
+            ImmutablePostings::Ids(_postings) => Either::Left(std::iter::empty()),
+        }
+    }
+
+    fn check_has_all_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if fuzzy_doc.is_empty() || self.values_is_empty(point_id) {
+            return false;
+        }
+
+        fn check_any<V: PostingValue>(
+            postings: &[PostingList<V>],
+            group: &TokenSet,
+            point_id: PointOffsetType,
+        ) -> bool {
+            // Check that at least one token is in document
+            group.tokens().iter().any(|token_id| {
+                let posting_list = &postings[*token_id as usize];
+                posting_list.visitor().contains(point_id)
+            })
+        }
+
+        // Hoist the postings enum match outside the loop — the variant never changes
+        // between iterations, so we avoid re-dispatching on every group.
+        match &self.postings {
+            ImmutablePostings::Ids(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+            ImmutablePostings::WithPositions(postings) => fuzzy_doc
+                .iter()
+                .all(|group| !group.is_empty() && check_any(postings, group, point_id)),
+        }
+    }
+
+    fn check_has_phrase_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
+        if self
+            .point_to_tokens_count
+            .get(point_id as usize)
+            .is_none_or(|x| *x == 0)
+        {
+            return false;
+        }
+
+        match &self.postings {
+            ImmutablePostings::Ids(_) => false,
+            ImmutablePostings::WithPositions(postings) => check_compressed_postings_fuzzy_phrase(
+                fuzzy_doc,
+                point_id,
+                get_grouped_existing_postings_with_tokens(postings, fuzzy_doc),
+            ),
         }
     }
 }
