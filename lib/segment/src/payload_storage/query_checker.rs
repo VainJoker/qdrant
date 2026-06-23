@@ -693,6 +693,7 @@ mod tests {
             lowercase: Some(true),
             on_disk: None,
             phrase_matching: None,
+            fuzzy_matching: None,
             stopwords: None,
             stemmer: None,
             ascii_folding: None,

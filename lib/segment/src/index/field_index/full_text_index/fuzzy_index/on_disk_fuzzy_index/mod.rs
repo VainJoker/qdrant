@@ -5,6 +5,7 @@ mod mmap_fst;
 use std::path::PathBuf;
 
 use common::fs::clear_disk_cache;
+use common::universal_io::Populate;
 use fst::{IntoStreamer, Streamer};
 pub use mmap_fst::MmapFst;
 use strsim::levenshtein;
@@ -31,15 +32,7 @@ impl OnDiskFuzzyIndex {
         Ok(())
     }
 
-    pub fn open(
-        path: PathBuf,
-        populate: bool,
-        enable_fuzzy: bool,
-    ) -> OperationResult<Option<Self>> {
-        if !enable_fuzzy {
-            return Ok(None);
-        }
-
+    pub fn open(path: PathBuf, populate: Populate) -> OperationResult<Option<Self>> {
         let fuzzy_index_path = path.join(FUZZY_INDEX_FILE);
         if !fuzzy_index_path.is_file() {
             return Ok(None);
@@ -61,8 +54,10 @@ impl OnDiskFuzzyIndex {
         self.index.fst_bytes()
     }
 
-    pub fn populate(&self) {
+    #[allow(clippy::unnecessary_wraps)]
+    pub fn populate(&self) -> OperationResult<()> {
         self.index.populate();
+        Ok(())
     }
 
     /// Drop disk cache.
@@ -100,13 +95,18 @@ impl FuzzyIndex for OnDiskFuzzyIndex {
                 .into_stream()
         };
 
+        if max == 0 {
+            return Vec::new();
+        }
+
+        let query_char_len = query.chars().count();
         let mut buckets: Vec<Vec<FuzzyCandidate>> = vec![Vec::new(); max_edits as usize + 1];
-        buckets[0].push(FuzzyCandidate::new(
-            query.to_string(),
-            query.chars().count(),
-            0,
-        ));
-        let mut total = 0usize;
+        // Keep the exact query first even when it is not in the fuzzy dictionary.
+        // Token-id resolution later drops unknown terms, while `max_expansions = 1`
+        // still means "exact term only" for every fuzzy index implementation.
+        buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
+        let mut total = 1usize;
+
         while let Some((term_bytes, _)) = stream.next() {
             let Ok(term) = std::str::from_utf8(term_bytes) else {
                 continue;
@@ -115,7 +115,7 @@ impl FuzzyIndex for OnDiskFuzzyIndex {
             if dist != 0 {
                 buckets[dist as usize].push(FuzzyCandidate::new(
                     term.to_string(),
-                    query.chars().count(),
+                    query_char_len,
                     dist,
                 ));
                 total += 1;
@@ -125,10 +125,11 @@ impl FuzzyIndex for OnDiskFuzzyIndex {
             }
         }
 
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total + 1);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total);
         for bucket in buckets {
             results.extend(bucket);
         }
+        results.truncate(max);
         results
     }
 }
