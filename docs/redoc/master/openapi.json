@@ -8489,6 +8489,11 @@
             "type": "boolean",
             "nullable": true
           },
+          "fuzzy_matching": {
+            "description": "If true, build an FST index for fuzzy matching. Default: false.",
+            "type": "boolean",
+            "nullable": true
+          },
           "stopwords": {
             "description": "Ignore this set of tokens. Can select from predefined languages and/or provide a custom set.",
             "anyOf": [

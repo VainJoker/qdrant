@@ -42,6 +42,7 @@ fn test_full_text_indexing() {
         max_token_len: None,
         lowercase: None,
         phrase_matching: None,
+        fuzzy_matching: None,
         on_disk: None,
         stopwords: None,
         stemmer: None,

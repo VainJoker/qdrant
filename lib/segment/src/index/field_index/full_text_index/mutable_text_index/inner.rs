@@ -3,6 +3,7 @@ use common::types::PointOffsetType;
 use common::universal_io::UserData;
 
 use super::super::full_text_index_read::FullTextIndexRead;
+use super::super::fuzzy_index::MutableFuzzyIndex;
 use super::super::inverted_index::mutable_inverted_index::MutableInvertedIndex;
 use super::super::inverted_index::{InvertedIndex, ParsedQuery, TokenId};
 use super::super::tokenizers::Tokenizer;
@@ -23,6 +24,7 @@ use crate::types::{FieldCondition, PayloadKeyType};
 /// [`ReadOnlyAppendableFullTextIndex`]: super::read_only::ReadOnlyAppendableFullTextIndex
 pub(in crate::index::field_index::full_text_index) struct MutableFullTextIndexInner {
     pub(in crate::index::field_index::full_text_index) inverted_index: MutableInvertedIndex,
+    pub(in crate::index::field_index::full_text_index) fuzzy_index: Option<MutableFuzzyIndex>,
     pub(in crate::index::field_index::full_text_index) config: TextIndexParams,
     pub(in crate::index::field_index::full_text_index) tokenizer: Tokenizer,
 }
@@ -99,6 +101,10 @@ impl FullTextIndexRead for MutableFullTextIndexInner {
 
     fn ram_usage_bytes(&self) -> usize {
         self.inverted_index.ram_usage_bytes()
+            + self
+                .fuzzy_index
+                .as_ref()
+                .map_or(0, |index| index.ram_usage_bytes())
     }
 
     fn is_on_disk(&self) -> bool {

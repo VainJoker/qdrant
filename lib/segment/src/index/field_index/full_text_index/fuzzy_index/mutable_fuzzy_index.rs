@@ -62,17 +62,21 @@ impl Default for MutableFuzzyIndex {
 impl FuzzyIndex for MutableFuzzyIndex {
     fn search_levenshtein(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate> {
         let max = params.max_expansions as usize;
+        if max == 0 {
+            return Vec::new();
+        }
+
         let max_edits = u32::from(params.max_edits);
         let mut buckets: Vec<Vec<FuzzyCandidate>> = (0..=max_edits).map(|_| Vec::new()).collect();
-        let mut total = 0usize;
+        let mut total = 1usize;
 
         let query_char_len = query.chars().count();
 
         let query_prefix = prefix_chars(query, params.prefix_length as usize);
-
-        if self.terms.contains(query) {
-            buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
-        }
+        // Keep the exact query first even when it is not in the fuzzy dictionary.
+        // Token-id resolution later drops unknown terms, while `max_expansions = 1`
+        // still means "exact term only" for every fuzzy index implementation.
+        buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
 
         // Use BTreeSet's sorted order to seek directly to the prefix boundary (O(log N))
         // instead of scanning every term and filtering (O(N)).
@@ -110,10 +114,11 @@ impl FuzzyIndex for MutableFuzzyIndex {
             }
         }
 
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total + 1);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total);
         for bucket in buckets {
             results.extend(bucket);
         }
+        results.truncate(max);
         results
     }
 }
