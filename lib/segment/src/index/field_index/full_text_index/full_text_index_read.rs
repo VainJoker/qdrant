@@ -229,6 +229,21 @@ pub trait FullTextIndexRead {
                         self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
                     Ok(tokenset.has_any(query))
                 }
+                ParsedQuery::FuzzyAnyTokens(query) => {
+                    let tokenset =
+                        self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
+                    Ok(tokenset.has_any(query))
+                }
+                ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                    let tokenset =
+                        self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
+                    Ok(!fuzzy_doc.is_empty()
+                        && fuzzy_doc.iter().all(|group| tokenset.has_any(group)))
+                }
+                ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                    let document = self.parse_document(value, hw_counter)?;
+                    Ok(document.is_some_and(|doc| fuzzy_doc.matches_document(&doc)))
+                }
             })
     }
 }

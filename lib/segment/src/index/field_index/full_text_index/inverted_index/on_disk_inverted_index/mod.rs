@@ -752,6 +752,9 @@ impl<S: UniversalRead> InvertedIndex for OnDiskInvertedIndex<S> {
             ParsedQuery::AllTokens(tokens) => self.filter_has_all(tokens)?,
             ParsedQuery::Phrase(phrase) => self.filter_has_phrase(phrase)?,
             ParsedQuery::AnyTokens(tokens) => self.filter_has_any(tokens)?,
+            ParsedQuery::FuzzyAnyTokens(tokens) => self.filter_has_any(tokens)?,
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.filter_has_all_fuzzy(fuzzy_doc)?,
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.filter_has_phrase_fuzzy(fuzzy_doc)?,
         };
         Ok(Box::new(ids.into_iter()))
     }
@@ -786,6 +789,9 @@ impl<S: UniversalRead> InvertedIndex for OnDiskInvertedIndex<S> {
             ParsedQuery::AllTokens(tokens) => self.check_has_subset(tokens, point_id),
             ParsedQuery::Phrase(phrase) => self.check_has_phrase(phrase, point_id),
             ParsedQuery::AnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::FuzzyAnyTokens(tokens) => self.check_has_any(tokens, point_id),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => self.check_has_all_fuzzy(fuzzy_doc, point_id),
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => self.check_has_phrase_fuzzy(fuzzy_doc, point_id),
         }
     }
 
