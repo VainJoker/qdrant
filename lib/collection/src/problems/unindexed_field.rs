@@ -243,6 +243,7 @@ fn infer_index_from_field_condition(field_condition: &FieldCondition) -> Vec<Fie
             Match::Any(match_any) => infer_index_from_any_variants(&match_any.any),
             Match::Except(match_except) => infer_index_from_any_variants(&match_except.except),
             Match::TextAny(_match_text_any) => vec![FieldIndexType::Text],
+            Match::Fuzzy(_match_fuzzy) => vec![FieldIndexType::TextFuzzy],
         })
     }
     if let Some(range_interface) = range {
@@ -551,6 +552,7 @@ enum FieldIndexType {
     FloatRange,
     Text,
     TextPhrase,
+    TextFuzzy,
     BoolMatch,
     UuidMatch,
     UuidRange,
@@ -629,6 +631,13 @@ impl From<FieldIndexType> for PayloadFieldSchema {
                 PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
                     r#type: TextIndexType::Text,
                     phrase_matching: Some(true),
+                    ..Default::default()
+                }))
+            }
+            FieldIndexType::TextFuzzy => {
+                PayloadFieldSchema::FieldParams(PayloadSchemaParams::Text(TextIndexParams {
+                    r#type: TextIndexType::Text,
+                    fuzzy_matching: Some(true),
                     ..Default::default()
                 }))
             }

@@ -379,6 +379,7 @@ fn condition_checker_impl<'a, T: MapIndexRead<UuidIntType> + 'a>(
         })
         | Match::Text(_)
         | Match::TextAny(_)
-        | Match::Phrase(_) => None,
+        | Match::Phrase(_)
+        | Match::Fuzzy(_) => None,
     }
 }

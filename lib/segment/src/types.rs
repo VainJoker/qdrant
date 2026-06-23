@@ -2370,10 +2370,15 @@ impl Display for PayloadFieldSchema {
                     }
                 }
                 PayloadSchemaParams::Text(text_params) => {
-                    if text_params.phrase_matching.unwrap_or_default() {
-                        write!(f, "text (with phrase_matching: true)")
-                    } else {
-                        write!(f, "text")
+                    let phrase = text_params.phrase_matching.unwrap_or_default();
+                    let fuzzy = text_params.fuzzy_matching.unwrap_or_default();
+                    match (phrase, fuzzy) {
+                        (true, true) => {
+                            write!(f, "text (with phrase_matching: true, fuzzy_matching: true)")
+                        }
+                        (true, false) => write!(f, "text (with phrase_matching: true)"),
+                        (false, true) => write!(f, "text (with fuzzy_matching: true)"),
+                        (false, false) => write!(f, "text"),
                     }
                 }
             },
@@ -2661,6 +2666,49 @@ impl FuzzyParams {
     fn default_max_expansions() -> u8 {
         30
     }
+
+    /// Validate and clamp parameters to safe ranges.
+    pub fn validate(&self) -> Result<Self, String> {
+        if self.max_edits > Self::MAX_EDITS_DISTANCE {
+            return Err(format!(
+                "fuzzy distance must be <= {}, got {}",
+                Self::MAX_EDITS_DISTANCE,
+                self.max_edits
+            ));
+        }
+        Ok(FuzzyParams {
+            max_edits: self.max_edits,
+            prefix_length: self.prefix_length,
+            max_expansions: self.max_expansions.clamp(1, Self::MAX_EXPANSIONS_CAP),
+        })
+    }
+}
+
+/// Fuzzy match condition: supports approximate full-text matching with the given parameters.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+pub struct MatchFuzzy {
+    pub fuzzy: Fuzzy,
+}
+
+/// Fuzzy match condition: supports approximate full-text matching with the given parameters.
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, PartialEq, Eq, Hash)]
+#[serde(untagged)]
+pub enum Fuzzy {
+    Text {
+        text: String,
+        #[serde(default)]
+        params: Option<FuzzyParams>,
+    },
+    Phrase {
+        phrase: String,
+        #[serde(default)]
+        params: Option<FuzzyParams>,
+    },
+    TextAny {
+        text_any: String,
+        #[serde(default)]
+        params: Option<FuzzyParams>,
+    },
 }
 
 /// Match filter request
@@ -2671,6 +2719,7 @@ pub enum MatchInterface {
     Text(MatchText),
     TextAny(MatchTextAny),
     Phrase(MatchPhrase),
+    Fuzzy(MatchFuzzy),
     Any(MatchAny),
     Except(MatchExcept),
 }
@@ -2683,6 +2732,7 @@ pub enum Match {
     Text(MatchText),
     TextAny(MatchTextAny),
     Phrase(MatchPhrase),
+    Fuzzy(MatchFuzzy),
     Any(MatchAny),
     Except(MatchExcept),
 }
@@ -2698,6 +2748,10 @@ impl Match {
 
     pub fn new_any(any: AnyVariants) -> Self {
         Self::Any(MatchAny { any })
+    }
+
+    pub fn new_fuzzy(fuzzy: MatchFuzzy) -> Self {
+        Self::Fuzzy(fuzzy)
     }
 
     pub fn new_except(except: AnyVariants) -> Self {
@@ -2724,6 +2778,7 @@ impl From<MatchInterface> for Match {
                 except: except.except,
             }),
             MatchInterface::Phrase(MatchPhrase { phrase }) => Self::Phrase(MatchPhrase { phrase }),
+            MatchInterface::Fuzzy(fuzzy) => Self::Fuzzy(fuzzy),
         }
     }
 }
@@ -3327,6 +3382,7 @@ impl FieldCondition {
             Match::Text(_) => 0,
             Match::Phrase(_) => 0,
             Match::TextAny(_) => 0,
+            Match::Fuzzy(_) => 0,
         }
     }
 }

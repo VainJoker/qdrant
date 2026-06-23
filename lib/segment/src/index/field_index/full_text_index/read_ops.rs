@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use super::FullTextIndex;
 use super::full_text_index_read::{FullTextIndexRead, PayloadMatchQueryType};
+use super::fuzzy_index::FuzzyIndex;
 use super::inverted_index::{ParsedQuery, TokenId};
 use super::tokenizers::Tokenizer;
 use crate::common::operation_error::OperationResult;
@@ -105,6 +106,14 @@ impl FullTextIndexRead for FullTextIndex {
             Self::Mutable(index) => index.check_match(query, point_id),
             Self::Immutable(index) => index.check_match(query, point_id),
             Self::OnDisk(index) => index.check_match(query, point_id),
+        }
+    }
+
+    fn fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        match self {
+            Self::Mutable(index) => index.fuzzy_index(),
+            Self::Immutable(index) => index.fuzzy_index(),
+            Self::OnDisk(index) => index.fuzzy_index(),
         }
     }
 
@@ -220,13 +229,14 @@ pub fn filter<'a, T: FullTextIndexRead>(
     };
 
     let parsed_query_opt = match r#match {
-        Match::Text(MatchText { text }) => index.parse_text_query(text, hw_counter),
-        Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, hw_counter),
+        Match::Text(MatchText { text }) => index.parse_text_query(text, hw_counter)?,
+        Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, hw_counter)?,
         Match::TextAny(MatchTextAny { text_any }) => {
-            index.parse_text_any_query(text_any, hw_counter)
+            index.parse_text_any_query(text_any, hw_counter)?
         }
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(match_fuzzy, hw_counter),
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
-    }?;
+    };
 
     let Some(parsed_query) = parsed_query_opt else {
         return Ok(Some(Box::new(std::iter::empty())));
@@ -246,13 +256,14 @@ pub fn estimate_cardinality<T: FullTextIndexRead>(
     };
 
     let parsed_query_opt = match r#match {
-        Match::Text(MatchText { text }) => index.parse_text_query(text, hw_counter),
-        Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, hw_counter),
+        Match::Text(MatchText { text }) => index.parse_text_query(text, hw_counter)?,
+        Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, hw_counter)?,
         Match::TextAny(MatchTextAny { text_any }) => {
-            index.parse_text_any_query(text_any, hw_counter)
+            index.parse_text_any_query(text_any, hw_counter)?
         }
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(match_fuzzy, hw_counter),
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
-    }?;
+    };
 
     let Some(parsed_query) = parsed_query_opt else {
         return Ok(Some(CardinalityEstimation::exact(0)));
@@ -300,23 +311,17 @@ pub fn condition_checker<'a, T: FullTextIndexRead>(
     };
     let hw_counter = hw_acc.get_counter_cell();
 
-    // FullTextIndex serves Text / TextAny / Phrase only. Other
-    // Match variants are explicitly listed so a new `Match`
-    // variant forces a decision.
-    let (text, query_type): (&str, _) = match cond_match {
-        Match::Text(MatchText { text }) => (text, PayloadMatchQueryType::Text),
-        Match::TextAny(MatchTextAny { text_any }) => (text_any, PayloadMatchQueryType::TextAny),
-        Match::Phrase(MatchPhrase { phrase }) => (phrase, PayloadMatchQueryType::Phrase),
+    let query_opt = match cond_match {
+        Match::Text(MatchText { text }) => index.parse_text_query(text, &hw_counter)?,
+        Match::TextAny(MatchTextAny { text_any }) => {
+            index.parse_text_any_query(text_any, &hw_counter)?
+        }
+        Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, &hw_counter)?,
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(match_fuzzy, &hw_counter),
         Match::Value(MatchValue { value: _ })
         | Match::Any(MatchAny { any: _ })
         | Match::Except(MatchExcept { except: _ }) => return Ok(None),
     };
-
-    let query_opt = match query_type {
-        PayloadMatchQueryType::Phrase => index.parse_phrase_query(text, &hw_counter),
-        PayloadMatchQueryType::Text => index.parse_text_query(text, &hw_counter),
-        PayloadMatchQueryType::TextAny => index.parse_text_any_query(text, &hw_counter),
-    }?;
 
     let Some(parsed_query) = query_opt else {
         return Ok(Some(Box::new(|_| Ok(false))));
@@ -353,6 +358,13 @@ pub fn special_check_condition<T: FullTextIndexRead>(
             PayloadMatchQueryType::TextAny,
             hw_counter,
         )?),
+        Some(Match::Fuzzy(match_fuzzy)) => {
+            let Some(query) = index.parse_fuzzy_query(match_fuzzy, hw_counter) else {
+                // Prevent fallback to raw substring matching when fuzzy index is absent.
+                return Ok(Some(false));
+            };
+            Some(index.check_payload_match_query(payload_value, &query, hw_counter)?)
+        }
         Some(Match::Value(_) | Match::Any(_) | Match::Except(_)) | None => None,
     })
 }
