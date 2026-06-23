@@ -205,20 +205,6 @@ impl MutableInvertedIndex {
         });
         Box::new(iter)
     }
-
-    fn check_has_all_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
-        let Some(doc) = self.get_tokens(point_id) else {
-            return false;
-        };
-        fuzzy_doc.iter().all(|group| doc.has_any(group))
-    }
-
-    fn check_has_phrase_fuzzy(&self, fuzzy_doc: &FuzzyDocument, point_id: PointOffsetType) -> bool {
-        let Some(doc) = self.get_document(point_id) else {
-            return false;
-        };
-        fuzzy_doc.matches_document(doc)
-    }
 }
 
 impl InvertedIndex for MutableInvertedIndex {

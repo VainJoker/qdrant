@@ -54,6 +54,7 @@ impl OnDiskFuzzyIndex {
         self.index.fst_bytes()
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn populate(&self) -> OperationResult<()> {
         self.index.populate();
         Ok(())
@@ -100,6 +101,9 @@ impl FuzzyIndex for OnDiskFuzzyIndex {
 
         let query_char_len = query.chars().count();
         let mut buckets: Vec<Vec<FuzzyCandidate>> = vec![Vec::new(); max_edits as usize + 1];
+        // Keep the exact query first even when it is not in the fuzzy dictionary.
+        // Token-id resolution later drops unknown terms, while `max_expansions = 1`
+        // still means "exact term only" for every fuzzy index implementation.
         buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
         let mut total = 1usize;
 

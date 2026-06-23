@@ -73,6 +73,9 @@ impl FuzzyIndex for MutableFuzzyIndex {
         let query_char_len = query.chars().count();
 
         let query_prefix = prefix_chars(query, params.prefix_length as usize);
+        // Keep the exact query first even when it is not in the fuzzy dictionary.
+        // Token-id resolution later drops unknown terms, while `max_expansions = 1`
+        // still means "exact term only" for every fuzzy index implementation.
         buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
 
         // Use BTreeSet's sorted order to seek directly to the prefix boundary (O(log N))

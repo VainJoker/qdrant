@@ -465,8 +465,8 @@ impl<S: UniversalRead> OnDiskInvertedIndex<S> {
         }
     }
 
-    fn filter_has_all_fuzzy<'a>(
-        &'a self,
+    fn filter_has_all_fuzzy(
+        &self,
         fuzzy_doc: FuzzyDocument,
     ) -> OperationResult<Vec<PointOffsetType>> {
         let is_active = move |idx: PointOffsetType| self.is_active(idx);
@@ -510,8 +510,8 @@ impl<S: UniversalRead> OnDiskInvertedIndex<S> {
         }
     }
 
-    fn filter_has_phrase_fuzzy<'a>(
-        &'a self,
+    fn filter_has_phrase_fuzzy(
+        &self,
         fuzzy_doc: FuzzyDocument,
     ) -> OperationResult<Vec<PointOffsetType>> {
         if fuzzy_doc.is_empty() {

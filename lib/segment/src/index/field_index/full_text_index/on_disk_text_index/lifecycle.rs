@@ -227,7 +227,7 @@ impl FieldIndexBuilderTrait for FullTextMmapIndexBuilder {
             terms.sort_unstable();
 
             let immutable_fuzzy_index =
-                ImmutableFuzzyIndex::build_from_sorted_terms(terms.into_iter())?;
+                ImmutableFuzzyIndex::build_from_sorted_terms(terms)?;
 
             OnDiskFuzzyIndex::create(path.clone(), &immutable_fuzzy_index)?;
 
