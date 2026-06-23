@@ -9,6 +9,7 @@ use super::ReadOnlyAppendableFullTextIndex;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::full_text_index::FullTextIndex;
+use crate::index::field_index::full_text_index::fuzzy_index::MutableFuzzyIndex;
 use crate::index::field_index::full_text_index::inverted_index::mutable_inverted_index_builder::MutableInvertedIndexBuilder;
 use crate::index::field_index::full_text_index::tokenizers::Tokenizer;
 
@@ -61,9 +62,17 @@ impl<S: UniversalRead> ReadOnlyAppendableFullTextIndex<S> {
                 ))
             })?;
 
+        let inverted_index = builder.build();
+
+        let fuzzy_index = config
+            .fuzzy_matching
+            .unwrap_or_default()
+            .then(|| MutableFuzzyIndex::build_index(inverted_index.vocab.keys().cloned()));
+
         Ok(Some(Self {
             inner: MutableFullTextIndexInner {
-                inverted_index: builder.build(),
+                inverted_index,
+                fuzzy_index,
                 config,
                 tokenizer,
             },

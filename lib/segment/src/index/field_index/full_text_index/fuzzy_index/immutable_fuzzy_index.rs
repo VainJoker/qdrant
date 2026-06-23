@@ -42,13 +42,18 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
             self.index.search(&automaton).ge(prefix_bytes).into_stream()
         };
 
+        if max == 0 {
+            return Vec::new();
+        }
+
+        let query_char_len = query.chars().count();
         let mut buckets: Vec<Vec<FuzzyCandidate>> = vec![Vec::new(); max_edits as usize + 1];
-        buckets[0].push(FuzzyCandidate::new(
-            query.to_string(),
-            query.chars().count(),
-            0,
-        ));
-        let mut total = 0usize;
+        // Keep the exact query first even when it is not in the fuzzy dictionary.
+        // Token-id resolution later drops unknown terms, while `max_expansions = 1`
+        // still means "exact term only" for every fuzzy index implementation.
+        buckets[0].push(FuzzyCandidate::new(query.to_string(), query_char_len, 0));
+        let mut total = 1usize;
+
         while let Some(term_bytes) = stream.next() {
             let Ok(term) = std::str::from_utf8(term_bytes) else {
                 continue;
@@ -57,7 +62,7 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
             if dist != 0 {
                 buckets[dist as usize].push(FuzzyCandidate::new(
                     term.to_string(),
-                    query.chars().count(),
+                    query_char_len,
                     dist,
                 ));
                 total += 1;
@@ -67,10 +72,11 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
             }
         }
 
-        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total + 1);
+        let mut results: Vec<FuzzyCandidate> = Vec::with_capacity(total);
         for bucket in buckets {
             results.extend(bucket);
         }
+        results.truncate(max);
         results
     }
 }

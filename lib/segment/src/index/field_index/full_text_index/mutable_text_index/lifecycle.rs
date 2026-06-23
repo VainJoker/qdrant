@@ -17,6 +17,7 @@ use crate::common::Flusher;
 use crate::common::operation_error::{OperationError, OperationResult};
 use crate::data_types::index::TextIndexParams;
 use crate::index::field_index::ValueIndexer;
+use crate::index::field_index::full_text_index::fuzzy_index::MutableFuzzyIndex;
 
 impl MutableFullTextIndex {
     /// Open and load mutable full text index from Gridstore storage
@@ -69,9 +70,17 @@ impl MutableFullTextIndex {
                 ))
             })?;
 
+        let inverted_index = builder.build();
+
+        let fuzzy_index = config
+            .fuzzy_matching
+            .unwrap_or_default()
+            .then(|| MutableFuzzyIndex::build_index(inverted_index.vocab.keys().cloned()));
+
         Ok(Some(Self {
             inner: MutableFullTextIndexInner {
-                inverted_index: builder.build(),
+                inverted_index,
+                fuzzy_index,
                 config,
                 tokenizer,
             },
@@ -135,6 +144,12 @@ impl MutableFullTextIndex {
             self.inner.tokenizer.tokenize_doc(value, |token| {
                 str_tokens.push(token);
             });
+        }
+
+        if let Some(fuzzy_index) = &mut self.inner.fuzzy_index {
+            for token in &str_tokens {
+                fuzzy_index.insert_if_new(token.as_ref());
+            }
         }
 
         let tokens = self.inner.inverted_index.register_tokens(&str_tokens);
