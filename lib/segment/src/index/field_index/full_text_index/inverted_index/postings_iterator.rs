@@ -178,6 +178,10 @@ pub fn check_compressed_postings_phrase(
 }
 
 /// Checks if `point_id`'s document satisfies the fuzzy phrase.
+///
+/// `group_postings` is grouped the same way as [`FuzzyDocument`]: each outer group
+/// represents one fuzzy term position, and each inner posting list represents one
+/// concrete token that can satisfy that position.
 pub fn check_compressed_postings_fuzzy_phrase<'a>(
     phrase: &FuzzyDocument,
     point_id: PointOffsetType,
@@ -207,17 +211,28 @@ pub fn check_compressed_postings_fuzzy_phrase<'a>(
             }
         }
 
+        // A fuzzy phrase requires every group to have at least one matching token
+        // in the point. If this group contributed nothing, the point cannot match.
         if tokens_positions.len() == before {
             return false;
         }
     }
 
+    // Different fuzzy alternatives may map to the same token/position pair.
+    // Normalize before reconstructing the partial document.
     tokens_positions.sort_unstable();
     tokens_positions.dedup();
 
     PartialDocument::new(tokens_positions).has_fuzzy_phrase(phrase)
 }
 
+/// One fuzzy-phrase group after upper layers expand a query term into token alternatives.
+///
+/// Built by immutable/on-disk `filter_has_phrase_fuzzy` before calling
+/// `intersect_compressed_postings_fuzzy_phrase_iterator`.  Phrase matching needs
+/// both token ids and positions, so each posting view is kept with its `TokenId`.
+/// `total_len` is used as a cheap cost estimate to choose the smallest group as
+/// the candidate driver.
 struct GroupPositionPostingViews<'a> {
     total_len: usize,
     views: Vec<(TokenId, PostingListView<'a, Positions>)>,
@@ -227,6 +242,62 @@ impl<'a> GroupPositionPostingViews<'a> {
     fn new(views: Vec<(TokenId, PostingListView<'a, Positions>)>) -> Self {
         let total_len = views.iter().map(|(_, view)| view.len()).sum();
         Self { total_len, views }
+    }
+}
+
+/// One fuzzy-all group after upper layers expand a query term into token alternatives.
+///
+/// Used by `intersect_compressed_postings_fuzzy_all_iterator`, which is called from
+/// immutable/on-disk `filter_has_all_fuzzy`.  Here only document membership matters,
+/// so token ids and positions are not needed; the group is just a set of posting views.
+struct GroupPostingViews<'a, V: PostingValue> {
+    total_len: usize,
+    views: Vec<PostingListView<'a, V>>,
+}
+
+impl<'a, V: PostingValue> GroupPostingViews<'a, V> {
+    fn new(views: Vec<PostingListView<'a, V>>) -> Self {
+        let total_len = views.iter().map(|view| view.len()).sum();
+        Self { total_len, views }
+    }
+}
+
+/// Materialized OR of one fuzzy-all group.
+///
+/// After the smallest group is chosen as the sorted candidate stream, every other
+/// group is stored as a sorted, deduplicated union.  `contains` can then check
+/// candidates with a monotonic cursor instead of repeatedly seeking from the start.
+struct MaterializedPostingUnion {
+    ids: Vec<PointOffsetType>,
+    offset: usize,
+}
+
+impl MaterializedPostingUnion {
+    fn new<'a, V: PostingValue + 'a>(views: Vec<PostingListView<'a, V>>) -> Self {
+        let ids = views
+            .into_iter()
+            .map(|view| view.into_iter().map(|elem| elem.id))
+            .kmerge_by(|a, b| a < b)
+            .dedup()
+            .collect();
+        Self { ids, offset: 0 }
+    }
+
+    fn contains(&mut self, point_id: PointOffsetType) -> bool {
+        // The candidate stream is sorted, so ids lower than the current candidate
+        // will never be needed again. Advance the cursor instead of binary-searching
+        // from the beginning for every candidate.
+        while self
+            .ids
+            .get(self.offset)
+            .is_some_and(|&current_id| current_id < point_id)
+        {
+            self.offset += 1;
+        }
+
+        self.ids
+            .get(self.offset)
+            .is_some_and(|&current_id| current_id == point_id)
     }
 }
 
@@ -252,6 +323,8 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
         return Either::Left(std::iter::empty());
     }
 
+    // Candidate generation is driven by the group with the smallest union size.
+    // This keeps the number of expensive phrase-position checks as low as possible.
     let smallest_candidate_group_idx = group_views
         .iter()
         .enumerate()
@@ -305,55 +378,14 @@ pub fn intersect_compressed_postings_fuzzy_phrase_iterator<'a>(
                         return false;
                     }
                 }
+                // Convert all matching alternatives into a compact synthetic document,
+                // then run the fuzzy phrase matcher over positions.
                 tokens_positions.sort_unstable();
                 tokens_positions.dedup();
                 PartialDocument::new(tokens_positions).has_fuzzy_phrase(&phrase)
             },
         ),
     )
-}
-
-struct GroupPostingViews<'a, V: PostingValue> {
-    total_len: usize,
-    views: Vec<PostingListView<'a, V>>,
-}
-
-impl<'a, V: PostingValue> GroupPostingViews<'a, V> {
-    fn new(views: Vec<PostingListView<'a, V>>) -> Self {
-        let total_len = views.iter().map(|view| view.len()).sum();
-        Self { total_len, views }
-    }
-}
-
-struct MaterializedPostingUnion {
-    ids: Vec<PointOffsetType>,
-    offset: usize,
-}
-
-impl MaterializedPostingUnion {
-    fn new<'a, V: PostingValue + 'a>(views: Vec<PostingListView<'a, V>>) -> Self {
-        let ids = views
-            .into_iter()
-            .map(|view| view.into_iter().map(|elem| elem.id))
-            .kmerge_by(|a, b| a < b)
-            .dedup()
-            .collect();
-        Self { ids, offset: 0 }
-    }
-
-    fn contains(&mut self, point_id: PointOffsetType) -> bool {
-        while self
-            .ids
-            .get(self.offset)
-            .is_some_and(|&current_id| current_id < point_id)
-        {
-            self.offset += 1;
-        }
-
-        self.ids
-            .get(self.offset)
-            .is_some_and(|&current_id| current_id == point_id)
-    }
 }
 
 /// Returns an iterator that yields every active point in which **every group** of the
@@ -382,6 +414,8 @@ pub fn intersect_compressed_postings_fuzzy_all_iterator<'a, V: PostingValue + 'a
         .min_by_key(|(_, group)| group.total_len)
         .map(|(idx, _)| idx)
         .unwrap();
+    // Generate candidates from the smallest per-group union, then intersect those
+    // candidates with the materialized unions of all remaining groups.
     let candidate_views = group_views.swap_remove(smallest_idx).views;
 
     group_views.sort_unstable_by_key(|group| group.total_len);
@@ -403,9 +437,37 @@ pub fn intersect_compressed_postings_fuzzy_all_iterator<'a, V: PostingValue + 'a
 #[cfg(test)]
 mod tests {
 
-    use posting_list::IdsPostingList;
+    use posting_list::{IdsPostingList, PostingList as CompressedPostingList};
 
     use super::*;
+    use crate::index::field_index::full_text_index::inverted_index::TokenSet;
+
+    fn token_set(tokens: &[TokenId]) -> TokenSet {
+        tokens.iter().copied().collect()
+    }
+
+    fn fuzzy_doc(groups: &[&[TokenId]]) -> FuzzyDocument {
+        FuzzyDocument::new(groups.iter().map(|tokens| token_set(tokens)).collect())
+    }
+
+    fn ids_posting(ids: &[PointOffsetType]) -> IdsPostingList {
+        ids.iter().copied().map(|id| (id, ())).collect()
+    }
+
+    fn positions_posting(
+        entries: Vec<(PointOffsetType, Vec<u32>)>,
+    ) -> CompressedPostingList<Positions> {
+        entries
+            .into_iter()
+            .map(|(id, positions)| {
+                let mut value = Positions::default();
+                for position in positions {
+                    value.push(position);
+                }
+                (id, value)
+            })
+            .collect()
+    }
 
     #[test]
     fn test_postings_iterator() {
@@ -447,5 +509,89 @@ mod tests {
         let res = merged.collect::<Vec<_>>();
 
         assert_eq!(res, vec![2, 5]);
+    }
+
+    #[test]
+    fn test_fuzzy_all_iterator_intersects_group_unions() {
+        let token_0 = ids_posting(&[1, 2, 10]);
+        let token_1 = ids_posting(&[3, 4]);
+        let token_2 = ids_posting(&[2, 3, 4, 5]);
+        let token_3 = ids_posting(&[10]);
+
+        let group_postings = vec![
+            vec![token_0.view(), token_1.view()],
+            vec![token_2.view(), token_3.view()],
+        ];
+
+        let result = intersect_compressed_postings_fuzzy_all_iterator(group_postings, |id| id != 3)
+            .collect::<Vec<_>>();
+
+        assert_eq!(result, vec![2, 4, 10]);
+    }
+
+    #[test]
+    fn test_fuzzy_phrase_iterator_checks_positions_and_alternatives() {
+        let token_10 = positions_posting(vec![(1, vec![0]), (4, vec![0]), (5, vec![0])]);
+        let token_11 = positions_posting(vec![(2, vec![0]), (3, vec![1])]);
+        let token_20 = positions_posting(vec![(1, vec![1]), (4, vec![1])]);
+        let token_21 = positions_posting(vec![(2, vec![2]), (3, vec![2]), (5, vec![1])]);
+        let token_30 =
+            positions_posting(vec![(1, vec![2]), (2, vec![3]), (3, vec![3]), (5, vec![2])]);
+
+        let phrase = fuzzy_doc(&[&[10, 11], &[20, 21], &[30]]);
+        let group_postings = || {
+            vec![
+                vec![(10, token_10.view()), (11, token_11.view())],
+                vec![(20, token_20.view()), (21, token_21.view())],
+                vec![(30, token_30.view())],
+            ]
+        };
+
+        let result = intersect_compressed_postings_fuzzy_phrase_iterator(
+            phrase.clone(),
+            group_postings(),
+            |id| id != 5,
+        )
+        .collect::<Vec<_>>();
+
+        assert_eq!(result, vec![1, 3]);
+        assert!(check_compressed_postings_fuzzy_phrase(
+            &phrase,
+            1,
+            group_postings()
+        ));
+        assert!(check_compressed_postings_fuzzy_phrase(
+            &phrase,
+            3,
+            group_postings()
+        ));
+        assert!(!check_compressed_postings_fuzzy_phrase(
+            &phrase,
+            2,
+            group_postings()
+        ));
+        assert!(!check_compressed_postings_fuzzy_phrase(
+            &phrase,
+            4,
+            group_postings()
+        ));
+    }
+
+    #[test]
+    fn test_fuzzy_phrase_check_deduplicates_overlapping_groups() {
+        let token_42 = positions_posting(vec![(7, vec![0])]);
+        let token_43 = positions_posting(vec![(7, vec![1])]);
+        let phrase = fuzzy_doc(&[&[42], &[42, 43]]);
+
+        let group_postings = vec![
+            vec![(42, token_42.view())],
+            vec![(42, token_42.view()), (43, token_43.view())],
+        ];
+
+        assert!(check_compressed_postings_fuzzy_phrase(
+            &phrase,
+            7,
+            group_postings
+        ));
     }
 }
