@@ -5,7 +5,7 @@ use common::universal_io::UserData;
 use serde_json::Value;
 
 use super::FullTextIndex;
-use super::full_text_index_read::{FullTextIndexRead, PayloadMatchQueryType};
+use super::full_text_index_read::FullTextIndexRead;
 use super::fuzzy_index::FuzzyIndex;
 use super::inverted_index::{ParsedQuery, TokenId};
 use super::tokenizers::Tokenizer;
@@ -340,31 +340,9 @@ pub fn special_check_condition<T: FullTextIndexRead>(
     hw_counter: &HardwareCounterCell,
 ) -> OperationResult<Option<bool>> {
     Ok(match &condition.r#match {
-        Some(Match::Text(MatchText { text })) => Some(index.check_payload_match(
-            payload_value,
-            text,
-            PayloadMatchQueryType::Text,
-            hw_counter,
-        )?),
-        Some(Match::Phrase(MatchPhrase { phrase })) => Some(index.check_payload_match(
-            payload_value,
-            phrase,
-            PayloadMatchQueryType::Phrase,
-            hw_counter,
-        )?),
-        Some(Match::TextAny(MatchTextAny { text_any })) => Some(index.check_payload_match(
-            payload_value,
-            text_any,
-            PayloadMatchQueryType::TextAny,
-            hw_counter,
-        )?),
-        Some(Match::Fuzzy(match_fuzzy)) => {
-            let Some(query) = index.parse_fuzzy_query(match_fuzzy, hw_counter) else {
-                // Prevent fallback to raw substring matching when fuzzy index is absent.
-                return Ok(Some(false));
-            };
-            Some(index.check_payload_match_query(payload_value, &query, hw_counter)?)
-        }
+        Some(
+            r#match @ (Match::Text(_) | Match::Phrase(_) | Match::TextAny(_) | Match::Fuzzy(_)),
+        ) => Some(index.check_payload_match(payload_value, r#match, hw_counter)?),
         Some(Match::Value(_) | Match::Any(_) | Match::Except(_)) | None => None,
     })
 }

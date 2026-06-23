@@ -13,17 +13,7 @@ use crate::common::operation_error::OperationResult;
 use crate::index::field_index::{CardinalityEstimation, PayloadBlockCondition, ValueIndexer};
 use crate::index::payload_config::StorageType;
 use crate::telemetry::PayloadIndexTelemetry;
-use crate::types::{FieldCondition, Fuzzy, FuzzyParams, MatchFuzzy, PayloadKeyType};
-
-/// Selects how a text query is parsed and matched against the payload.
-pub enum PayloadMatchQueryType {
-    /// All query tokens must be present in the document (any order).
-    Text,
-    /// All query tokens must be present in exact order.
-    Phrase,
-    /// At least one query token must be present.
-    TextAny,
-}
+use crate::types::{FieldCondition, Fuzzy, FuzzyParams, Match, MatchFuzzy, PayloadKeyType};
 
 /// Shared read surface for the writable [`FullTextIndex`] enum and the
 /// read-only `ReadOnlyFullTextIndex<S>` skeleton. Lets the
@@ -153,8 +143,14 @@ pub trait FullTextIndexRead {
                     return self.parse_text_query(text, hw_counter).ok().flatten();
                 }
 
-                let mut groups =
-                    self.parse_fuzzy_token_sets(text, params, hw_counter, true, fuzzy_index)?;
+                let mut groups = self.parse_fuzzy_token_sets(
+                    TokenizerTextKind::Query,
+                    text,
+                    params,
+                    hw_counter,
+                    true,
+                    fuzzy_index,
+                )?;
                 groups.sort_unstable_by_key(TokenSet::len);
                 Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(groups)))
             }
@@ -168,7 +164,14 @@ pub trait FullTextIndexRead {
                 }
 
                 let tokens = self
-                    .parse_fuzzy_token_sets(text_any, params, hw_counter, false, fuzzy_index)?
+                    .parse_fuzzy_token_sets(
+                        TokenizerTextKind::Query,
+                        text_any,
+                        params,
+                        hw_counter,
+                        false,
+                        fuzzy_index,
+                    )?
                     .into_iter()
                     .flat_map(TokenSet::inner)
                     .collect();
@@ -180,8 +183,14 @@ pub trait FullTextIndexRead {
                     return self.parse_phrase_query(phrase, hw_counter).ok().flatten();
                 }
 
-                let groups =
-                    self.parse_fuzzy_token_sets(phrase, params, hw_counter, true, fuzzy_index)?;
+                let groups = self.parse_fuzzy_token_sets(
+                    TokenizerTextKind::Document,
+                    phrase,
+                    params,
+                    hw_counter,
+                    true,
+                    fuzzy_index,
+                )?;
                 Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(groups)))
             }
         }
@@ -189,6 +198,7 @@ pub trait FullTextIndexRead {
 
     fn parse_fuzzy_token_sets(
         &self,
+        kind: TokenizerTextKind,
         text: &str,
         params: &FuzzyParams,
         hw_counter: &HardwareCounterCell,
@@ -198,14 +208,13 @@ pub trait FullTextIndexRead {
         let mut token_sets = Vec::new();
         let mut failed = false;
 
-        self.tokenizer()
-            .tokenize(TokenizerTextKind::Query, text, |token| {
-                match self.expand_fuzzy_token(token.as_ref(), params, hw_counter, fuzzy_index) {
-                    Some(token_set) if !token_set.is_empty() => token_sets.push(token_set),
-                    Some(_) if !require_each_token => {}
-                    _ => failed = true,
-                }
-            });
+        self.tokenizer().tokenize(kind, text, |token| {
+            match self.expand_fuzzy_token(token.as_ref(), params, hw_counter, fuzzy_index) {
+                Some(token_set) if !token_set.is_empty() => token_sets.push(token_set),
+                Some(_) if !require_each_token => {}
+                _ => failed = true,
+            }
+        });
 
         if failed || token_sets.is_empty() {
             return None;
@@ -313,42 +322,33 @@ pub trait FullTextIndexRead {
         Ok(Some(Document::new(document_tokens)))
     }
 
-    /// Checks the text directly against the payload value using the
+    /// Checks a full-text match directly against the payload value using the
     /// full-text index tokenizer.
-    ///
-    /// `query_type` selects the parsing / matching strategy:
-    /// - `Text`    — all query tokens must appear in the document
-    /// - `Phrase`  — all query tokens must appear in exact order
-    /// - `TextAny` — at least one query token must appear
     fn check_payload_match(
         &self,
         payload_value: &serde_json::Value,
-        text: &str,
-        query_type: PayloadMatchQueryType,
+        r#match: &Match,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<bool> {
-        let query_opt = match query_type {
-            PayloadMatchQueryType::Text => self.parse_text_query(text, hw_counter)?,
-            PayloadMatchQueryType::Phrase => self.parse_phrase_query(text, hw_counter)?,
-            PayloadMatchQueryType::TextAny => self.parse_text_any_query(text, hw_counter)?,
+        let query_opt = match r#match {
+            Match::Text(match_text) => self.parse_text_query(&match_text.text, hw_counter)?,
+            Match::Phrase(match_phrase) => {
+                self.parse_phrase_query(&match_phrase.phrase, hw_counter)?
+            }
+            Match::TextAny(match_text_any) => {
+                self.parse_text_any_query(&match_text_any.text_any, hw_counter)?
+            }
+            Match::Fuzzy(match_fuzzy) => self.parse_fuzzy_query(match_fuzzy, hw_counter),
+            Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(false),
         };
 
         let Some(query) = query_opt else {
             return Ok(false);
         };
 
-        self.check_payload_match_query(payload_value, &query, hw_counter)
-    }
-
-    fn check_payload_match_query(
-        &self,
-        payload_value: &serde_json::Value,
-        query: &ParsedQuery,
-        hw_counter: &HardwareCounterCell,
-    ) -> OperationResult<bool> {
         <super::FullTextIndex as ValueIndexer>::get_values(payload_value)
             .iter()
-            .try_any(|value| match query {
+            .try_any(|value| match &query {
                 ParsedQuery::AllTokens(query) => {
                     let tokenset =
                         self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
