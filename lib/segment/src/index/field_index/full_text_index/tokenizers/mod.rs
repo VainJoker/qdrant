@@ -205,6 +205,10 @@ impl Tokenizer {
         }
     }
 
+    pub fn tokens_processor(&self) -> &TokensProcessor {
+        &self.tokens_processor
+    }
+
     pub fn tokenize<'a, C: FnMut(Cow<'a, str>)>(
         &self,
         kind: TokenizerTextKind,

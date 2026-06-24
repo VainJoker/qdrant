@@ -317,6 +317,13 @@ impl InvertedIndex for MutableInvertedIndex {
             ParsedQuery::AllTokens(tokens) => Ok(Box::new(self.filter_has_all(tokens))),
             ParsedQuery::Phrase(phrase) => Ok(Box::new(self.filter_has_phrase(phrase))),
             ParsedQuery::AnyTokens(tokens) => Ok(Box::new(self.filter_has_any(tokens))),
+            ParsedQuery::FuzzyAnyTokens(tokens) => Ok(Box::new(self.filter_has_any(tokens))),
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                Ok(Box::new(self.filter_has_all_fuzzy(fuzzy_doc)))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                Ok(Box::new(self.filter_has_phrase_fuzzy(fuzzy_doc)))
+            }
         }
     }
 
@@ -369,6 +376,30 @@ impl InvertedIndex for MutableInvertedIndex {
 
                 // Check that at least one token is in document
                 doc.has_any(query)
+            }
+            ParsedQuery::FuzzyAnyTokens(query) => {
+                let Some(doc) = self.get_tokens(point_id) else {
+                    return Ok(false);
+                };
+
+                // Check that at least one fuzzy token is in document
+                doc.has_any(query)
+            }
+            ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                let Some(doc) = self.get_tokens(point_id) else {
+                    return Ok(false);
+                };
+
+                // Check that every fuzzy token group has at least one token in document
+                !fuzzy_doc.is_empty() && fuzzy_doc.iter().all(|group| doc.has_any(group))
+            }
+            ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                let Some(doc) = self.get_document(point_id) else {
+                    return Ok(false);
+                };
+
+                // Check that fuzzy token groups are in document, in order
+                fuzzy_doc.matches_document(doc)
             }
         };
         Ok(matched)

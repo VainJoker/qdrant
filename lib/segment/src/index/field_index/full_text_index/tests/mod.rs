@@ -5,12 +5,39 @@ use common::counter::hardware_counter::HardwareCounterCell;
 use common::types::PointOffsetType;
 use tempfile::Builder;
 
+use super::tokenizers::TokenizerTextKind;
 use crate::data_types::index::{TextIndexParams, TextIndexType, TokenizerType};
 use crate::index::field_index::full_text_index::FullTextIndex;
 use crate::index::field_index::full_text_index::full_text_index_read::FullTextIndexRead;
 use crate::index::field_index::{
     FieldIndex, FieldIndexBuilderTrait as _, PayloadFieldIndexRead, ValueIndexer,
 };
+use crate::types::{Fuzzy, FuzzyParams};
+
+fn fuzzy_test_params() -> TextIndexParams {
+    TextIndexParams {
+        r#type: TextIndexType::Text,
+        tokenizer: TokenizerType::Word,
+        min_token_len: None,
+        max_token_len: None,
+        lowercase: Some(true),
+        phrase_matching: Some(true),
+        fuzzy_matching: Some(true),
+        stopwords: None,
+        on_disk: None,
+        stemmer: None,
+        ascii_folding: None,
+        enable_hnsw: None,
+    }
+}
+
+fn one_edit_params() -> FuzzyParams {
+    FuzzyParams {
+        max_edits: 1,
+        prefix_length: 0,
+        max_expansions: 30,
+    }
+}
 
 fn movie_titles() -> Vec<String> {
     vec![
@@ -345,6 +372,165 @@ fn test_phrase_matching() {
 
     check_matching(mutable_index);
     check_matching(mmap_index);
+}
+
+#[test]
+fn test_fuzzy_token_sets_require_all_and_any_semantics() {
+    let hw_counter = HardwareCounterCell::new();
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let mut index =
+        FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), fuzzy_test_params(), true)
+            .unwrap()
+            .unwrap();
+
+    index
+        .add_many(0, vec!["cart wheels".to_string()], &hw_counter)
+        .unwrap();
+    index
+        .add_many(1, vec!["core memory".to_string()], &hw_counter)
+        .unwrap();
+
+    let params = one_edit_params();
+    let fuzzy_index = index.fuzzy_index().unwrap();
+
+    let any_sets = index
+        .fuzzy_token_sets(
+            fuzzy_index,
+            &hw_counter,
+            TokenizerTextKind::Query,
+            "kart xylophon",
+            &params,
+            false,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(any_sets.len(), 1);
+    assert_eq!(any_sets[0].len(), 1);
+
+    assert!(
+        index
+            .fuzzy_token_sets(
+                fuzzy_index,
+                &hw_counter,
+                TokenizerTextKind::Query,
+                "kart xylophon",
+                &params,
+                true,
+            )
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn test_fuzzy_token_sets_resolve_short_tokens_exactly() {
+    let hw_counter = HardwareCounterCell::new();
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let mut index =
+        FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), fuzzy_test_params(), true)
+            .unwrap()
+            .unwrap();
+
+    index
+        .add_many(0, vec!["cat".to_string()], &hw_counter)
+        .unwrap();
+
+    let params = one_edit_params();
+    let fuzzy_index = index.fuzzy_index().unwrap();
+
+    assert!(
+        index
+            .fuzzy_token_sets(
+                fuzzy_index,
+                &hw_counter,
+                TokenizerTextKind::Query,
+                "cut",
+                &params,
+                true,
+            )
+            .unwrap()
+            .is_none(),
+        "tokens with length <= min_token_len must not fuzzy-expand"
+    );
+
+    let exact_sets = index
+        .fuzzy_token_sets(
+            fuzzy_index,
+            &hw_counter,
+            TokenizerTextKind::Query,
+            "cat",
+            &params,
+            true,
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(exact_sets.len(), 1);
+    assert_eq!(exact_sets[0].len(), 1);
+}
+
+#[test]
+fn test_parse_fuzzy_query_variants() {
+    let hw_counter = HardwareCounterCell::new();
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let mut index =
+        FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), fuzzy_test_params(), true)
+            .unwrap()
+            .unwrap();
+
+    for (point_id, text) in [
+        (0, "quick brown fox"),
+        (1, "quick blue fox"),
+        (2, "slow brown dog"),
+        (3, "quick brown dog"),
+    ] {
+        index
+            .add_many(point_id, vec![text.to_string()], &hw_counter)
+            .unwrap();
+    }
+
+    let params = one_edit_params();
+
+    let query = index
+        .parse_fuzzy_query(
+            &Fuzzy::Text {
+                text: "quik brwn".to_string(),
+                params: Some(params),
+            },
+            &hw_counter,
+        )
+        .unwrap()
+        .unwrap();
+    let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
+    results.sort_unstable();
+    assert_eq!(results, vec![0, 3]);
+
+    let query = index
+        .parse_fuzzy_query(
+            &Fuzzy::TextAny {
+                text_any: "quik brwn".to_string(),
+                params: Some(params),
+            },
+            &hw_counter,
+        )
+        .unwrap()
+        .unwrap();
+    let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
+    results.sort_unstable();
+    assert_eq!(results, vec![0, 1, 2, 3]);
+
+    let query = index
+        .parse_fuzzy_query(
+            &Fuzzy::Phrase {
+                phrase: "quik brwn".to_string(),
+                params: Some(params),
+            },
+            &hw_counter,
+        )
+        .unwrap()
+        .unwrap();
+    let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
+    results.sort_unstable();
+    assert_eq!(results, vec![0, 3]);
 }
 
 #[test]

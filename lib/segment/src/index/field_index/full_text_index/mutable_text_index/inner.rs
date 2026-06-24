@@ -3,7 +3,7 @@ use common::types::PointOffsetType;
 use common::universal_io::UserData;
 
 use super::super::full_text_index_read::FullTextIndexRead;
-use super::super::fuzzy_index::MutableFuzzyIndex;
+use super::super::fuzzy_index::{FuzzyIndex, MutableFuzzyIndex};
 use super::super::inverted_index::mutable_inverted_index::MutableInvertedIndex;
 use super::super::inverted_index::{InvertedIndex, ParsedQuery, TokenId};
 use super::super::tokenizers::Tokenizer;
@@ -81,6 +81,12 @@ impl FullTextIndexRead for MutableFullTextIndexInner {
 
     fn check_match(&self, query: &ParsedQuery, point_id: PointOffsetType) -> OperationResult<bool> {
         self.inverted_index.check_match(query, point_id)
+    }
+
+    fn fuzzy_index(&self) -> Option<&dyn FuzzyIndex> {
+        self.fuzzy_index
+            .as_ref()
+            .map(|index| index as &dyn FuzzyIndex)
     }
 
     fn for_each_payload_block_inner(

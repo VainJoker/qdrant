@@ -6,23 +6,14 @@ use common::iterator_ext::IteratorExt;
 use common::types::PointOffsetType;
 use common::universal_io::UserData;
 
-use super::inverted_index::{Document, ParsedQuery, TokenId, TokenSet};
+use super::fuzzy_index::FuzzyIndex;
+use super::inverted_index::{Document, FuzzyDocument, ParsedQuery, TokenId, TokenSet};
 use super::tokenizers::{Tokenizer, TokenizerTextKind};
 use crate::common::operation_error::OperationResult;
 use crate::index::field_index::{CardinalityEstimation, PayloadBlockCondition, ValueIndexer};
 use crate::index::payload_config::StorageType;
 use crate::telemetry::PayloadIndexTelemetry;
-use crate::types::{FieldCondition, PayloadKeyType};
-
-/// Selects how a text query is parsed and matched against the payload.
-pub enum PayloadMatchQueryType {
-    /// All query tokens must be present in the document (any order).
-    Text,
-    /// All query tokens must be present in exact order.
-    Phrase,
-    /// At least one query token must be present.
-    TextAny,
-}
+use crate::types::{FieldCondition, Fuzzy, FuzzyParams, Match, PayloadKeyType};
 
 /// Shared read surface for the writable [`FullTextIndex`] enum and the
 /// read-only `ReadOnlyFullTextIndex<S>` skeleton. Lets the
@@ -80,6 +71,8 @@ pub trait FullTextIndexRead {
 
     fn check_match(&self, query: &ParsedQuery, point_id: PointOffsetType) -> OperationResult<bool>;
 
+    fn fuzzy_index(&self) -> Option<&dyn FuzzyIndex>;
+
     /// Walk the inverted-index vocab and emit one [`PayloadBlockCondition`] per
     /// token with at least `threshold` postings. Used to seed payload-block
     /// scans for full-text indexes.
@@ -130,6 +123,163 @@ pub trait FullTextIndexRead {
     ) -> OperationResult<Option<ParsedQuery>> {
         let tokenset = self.parse_tokenset(TokenizerTextKind::Query, text, hw_counter)?;
         Ok(Some(ParsedQuery::AnyTokens(tokenset)))
+    }
+
+    /// Expand a fuzzy full-text query into index token-id groups.
+    ///
+    /// Each token produced from `text` becomes one [`TokenSet`] containing all
+    /// indexed terms that can satisfy that query token. Later query execution
+    /// treats these groups according to the caller's semantics:
+    /// - `require_all = true`: every query token must resolve to a non-empty
+    ///   group; used by `Fuzzy::Text` and `Fuzzy::Phrase`.
+    /// - `require_all = false`: unresolved query tokens are ignored as long as
+    ///   at least one group resolves; used by `Fuzzy::TextAny`.
+    ///
+    /// Very short tokens are resolved exactly instead of through the fuzzy FST.
+    /// This keeps approximate matching from becoming too broad/noisy for short
+    /// terms, where one edit can change most of the token.
+    ///
+    /// Returns [`None`] if `require_all` is set and any query token has no match,
+    /// or if no token groups remain.
+    fn fuzzy_token_sets(
+        &self,
+        fuzzy_index: &dyn FuzzyIndex,
+        hw_counter: &HardwareCounterCell,
+        kind: TokenizerTextKind,
+        text: &str,
+        params: &FuzzyParams,
+        require_all: bool,
+    ) -> OperationResult<Option<Vec<TokenSet>>> {
+        let min_len = self
+            .tokenizer()
+            .tokens_processor()
+            .min_token_len
+            .unwrap_or(3);
+        let mut result: OperationResult<Vec<TokenSet>> = Ok(Vec::new());
+        let mut missing_required_token = false;
+        self.tokenizer().tokenize(kind, text, |token| {
+            if missing_required_token {
+                return;
+            }
+            let Ok(sets) = result.as_mut() else {
+                return;
+            };
+            let mut token_ids = Vec::new();
+            let ok = if token.chars().count() <= min_len {
+                self.for_each_token_id(
+                    std::iter::once(((), token.as_ref())),
+                    hw_counter,
+                    |(), id| {
+                        if let Some(id) = id {
+                            token_ids.push(id);
+                        }
+                    },
+                )
+            } else {
+                let candidates = fuzzy_index.search_levenshtein(token.as_ref(), params);
+                self.for_each_token_id(
+                    candidates.iter().map(|c| ((), c.term.as_str())),
+                    hw_counter,
+                    |(), id| {
+                        if let Some(id) = id {
+                            token_ids.push(id);
+                        }
+                    },
+                )
+            };
+            match ok {
+                Err(err) => result = Err(err),
+                Ok(_) => {
+                    let ts: TokenSet = token_ids.into_iter().collect();
+                    if !ts.is_empty() {
+                        sets.push(ts);
+                    } else if require_all {
+                        missing_required_token = true;
+                    }
+                }
+            }
+        });
+        if missing_required_token {
+            return Ok(None);
+        }
+        result.map(|sets| (!sets.is_empty()).then_some(sets))
+    }
+
+    /// Convert a user-facing fuzzy match clause into the internal parsed query.
+    ///
+    /// Fuzzy parsing is available only when the fuzzy index exists. For
+    /// `max_edits = 0`, this intentionally reuses the exact full-text parsers
+    /// while still requiring the fuzzy index to be configured for `Match::Fuzzy`.
+    fn parse_fuzzy_query(
+        &self,
+        fuzzy: &Fuzzy,
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<Option<ParsedQuery>> {
+        let Some(fuzzy_index) = self.fuzzy_index() else {
+            return Ok(None);
+        };
+        let default_params = FuzzyParams::default();
+
+        match fuzzy {
+            Fuzzy::Text { text, params } => {
+                let params = params.as_ref().unwrap_or(&default_params);
+                if params.max_edits == 0 {
+                    return self.parse_text_query(text, hw_counter);
+                }
+                let Some(mut groups) = self.fuzzy_token_sets(
+                    fuzzy_index,
+                    hw_counter,
+                    TokenizerTextKind::Query,
+                    text,
+                    params,
+                    true,
+                )?
+                else {
+                    return Ok(None);
+                };
+                groups.sort_unstable_by_key(TokenSet::len);
+                Ok(Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(
+                    groups,
+                ))))
+            }
+            Fuzzy::TextAny { text_any, params } => {
+                let params = params.as_ref().unwrap_or(&default_params);
+                if params.max_edits == 0 {
+                    return self.parse_text_any_query(text_any, hw_counter);
+                }
+                let Some(groups) = self.fuzzy_token_sets(
+                    fuzzy_index,
+                    hw_counter,
+                    TokenizerTextKind::Query,
+                    text_any,
+                    params,
+                    false,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let tokens = groups.into_iter().flat_map(TokenSet::inner).collect();
+                Ok(Some(ParsedQuery::FuzzyAnyTokens(tokens)))
+            }
+            Fuzzy::Phrase { phrase, params } => {
+                let params = params.as_ref().unwrap_or(&default_params);
+                if params.max_edits == 0 {
+                    return self.parse_phrase_query(phrase, hw_counter);
+                }
+                let Some(groups) = self.fuzzy_token_sets(
+                    fuzzy_index,
+                    hw_counter,
+                    TokenizerTextKind::Document,
+                    phrase,
+                    params,
+                    true,
+                )?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(groups))))
+            }
+        }
     }
 
     /// Parse as provided [`TokenizerTextKind`] and return [`TokenSet`].
@@ -188,24 +338,24 @@ pub trait FullTextIndexRead {
         Ok(Some(Document::new(document_tokens)))
     }
 
-    /// Checks the text directly against the payload value using the
+    /// Checks a full-text match directly against the payload value using the
     /// full-text index tokenizer.
-    ///
-    /// `query_type` selects the parsing / matching strategy:
-    /// - `Text`    — all query tokens must appear in the document
-    /// - `Phrase`  — all query tokens must appear in exact order
-    /// - `TextAny` — at least one query token must appear
     fn check_payload_match(
         &self,
         payload_value: &serde_json::Value,
-        text: &str,
-        query_type: PayloadMatchQueryType,
+        r#match: &Match,
         hw_counter: &HardwareCounterCell,
     ) -> OperationResult<bool> {
-        let query_opt = match query_type {
-            PayloadMatchQueryType::Text => self.parse_text_query(text, hw_counter)?,
-            PayloadMatchQueryType::Phrase => self.parse_phrase_query(text, hw_counter)?,
-            PayloadMatchQueryType::TextAny => self.parse_text_any_query(text, hw_counter)?,
+        let query_opt = match r#match {
+            Match::Text(match_text) => self.parse_text_query(&match_text.text, hw_counter)?,
+            Match::Phrase(match_phrase) => {
+                self.parse_phrase_query(&match_phrase.phrase, hw_counter)?
+            }
+            Match::TextAny(match_text_any) => {
+                self.parse_text_any_query(&match_text_any.text_any, hw_counter)?
+            }
+            Match::Fuzzy(match_fuzzy) => self.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter)?,
+            Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(false),
         };
 
         let Some(query) = query_opt else {
@@ -228,6 +378,21 @@ pub trait FullTextIndexRead {
                     let tokenset =
                         self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
                     Ok(tokenset.has_any(query))
+                }
+                ParsedQuery::FuzzyAnyTokens(query) => {
+                    let tokenset =
+                        self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
+                    Ok(tokenset.has_any(query))
+                }
+                ParsedQuery::FuzzyAllTokens(fuzzy_doc) => {
+                    let tokenset =
+                        self.parse_tokenset(TokenizerTextKind::Document, value, hw_counter)?;
+                    Ok(!fuzzy_doc.is_empty()
+                        && fuzzy_doc.iter().all(|group| tokenset.has_any(group)))
+                }
+                ParsedQuery::FuzzyPhrase(fuzzy_doc) => {
+                    let document = self.parse_document(value, hw_counter)?;
+                    Ok(document.is_some_and(|doc| fuzzy_doc.matches_document(&doc)))
                 }
             })
     }
