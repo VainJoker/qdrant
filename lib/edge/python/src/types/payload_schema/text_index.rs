@@ -19,7 +19,7 @@ pub struct PyTextIndexParams(pub TextIndexParams);
 impl PyTextIndexParams {
     #[expect(clippy::too_many_arguments)]
     #[new]
-    #[pyo3(signature = (tokenizer = None, min_token_len = None, max_token_len = None, lowercase = None, ascii_folding = None, phrase_matching = None, stopwords = None, on_disk = None, stemmer = None, enable_hnsw = None))]
+    #[pyo3(signature = (tokenizer = None, min_token_len = None, max_token_len = None, lowercase = None, ascii_folding = None, phrase_matching = None, stopwords = None, on_disk = None, stemmer = None, enable_hnsw = None, fuzzy_matching = None))]
     pub fn new(
         tokenizer: Option<PyTokenizerType>,
         min_token_len: Option<usize>,
@@ -31,6 +31,7 @@ impl PyTextIndexParams {
         on_disk: Option<bool>,
         stemmer: Option<PyStemmingAlgorithm>,
         enable_hnsw: Option<bool>,
+        fuzzy_matching: Option<bool>,
     ) -> Self {
         Self(TextIndexParams {
             r#type: Default::default(),
@@ -40,7 +41,7 @@ impl PyTextIndexParams {
             lowercase,
             ascii_folding,
             phrase_matching,
-            fuzzy_matching: None,
+            fuzzy_matching,
             stopwords: stopwords.map(StopwordsInterface::from),
             on_disk,
             stemmer: stemmer.map(StemmingAlgorithm::from),
@@ -76,6 +77,11 @@ impl PyTextIndexParams {
     #[getter]
     pub fn phrase_matching(&self) -> Option<bool> {
         self.0.phrase_matching
+    }
+
+    #[getter]
+    pub fn fuzzy_matching(&self) -> Option<bool> {
+        self.0.fuzzy_matching
     }
 
     #[getter]

@@ -49,17 +49,17 @@ use crate::grpc::qdrant::point_id::PointIdOptions;
 use crate::grpc::qdrant::with_payload_selector::SelectorOptions;
 use crate::grpc::qdrant::{
     AcornSearchParams, CollectionDescription, CollectionOperationResponse, Condition, Distance,
-    FieldCondition, Filter, GeoBoundingBox, GeoPoint, GeoPolygon, GeoRadius, HasIdCondition,
-    HealthCheckReply, HnswConfigDiff, IntegerIndexParams, IsEmptyCondition, IsNullCondition,
-    ListCollectionsResponse, ListShardKeysResponse, Match, MinShould, NamedVectors,
-    NestedCondition, PayloadExcludeSelector, PayloadIncludeSelector, PayloadIndexParams,
-    PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct, PointsOperationResponse,
-    PointsOperationResponseInternal, ProductQuantization, QuantizationConfig,
-    QuantizationSearchParams, QuantizationType, RepeatedIntegers, RepeatedStrings,
-    ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription, StopwordsSet,
-    StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult, UpdateResultInternal,
-    ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector, shard_key,
-    with_vectors_selector,
+    FieldCondition, Filter, FuzzyMatch, FuzzyParams, GeoBoundingBox, GeoPoint, GeoPolygon,
+    GeoRadius, HasIdCondition, HealthCheckReply, HnswConfigDiff, IntegerIndexParams,
+    IsEmptyCondition, IsNullCondition, ListCollectionsResponse, ListShardKeysResponse, Match,
+    MinShould, NamedVectors, NestedCondition, PayloadExcludeSelector, PayloadIncludeSelector,
+    PayloadIndexParams, PayloadSchemaInfo, PayloadSchemaType, PointId, PointStruct,
+    PointsOperationResponse, PointsOperationResponseInternal, ProductQuantization,
+    QuantizationConfig, QuantizationSearchParams, QuantizationType, RepeatedIntegers,
+    RepeatedStrings, ScalarQuantization, ScoredPoint, SearchParams, ShardKey, ShardKeyDescription,
+    StopwordsSet, StrictModeConfig, TextIndexParams, TokenizerType, UpdateResult,
+    UpdateResultInternal, ValuesCount, VectorsSelector, WithPayloadSelector, WithVectorsSelector,
+    shard_key, with_vectors_selector,
 };
 use crate::grpc::{
     self, BinaryQuantizationEncoding, BinaryQuantizationQueryEncoding, DecayParamsExpression,
@@ -2088,6 +2088,7 @@ impl TryFrom<Match> for segment::types::Match {
                 MatchValue::Boolean(flag) => flag.into(),
                 MatchValue::Text(text) => segment::types::Match::Text(text.into()),
                 MatchValue::Phrase(phrase) => segment::types::Match::Phrase(phrase.into()),
+                MatchValue::Fuzzy(fuzzy) => segment::types::Match::Fuzzy(fuzzy.try_into()?),
                 MatchValue::Keywords(kwds) => kwds.strings.into(),
                 MatchValue::Integers(ints) => ints.integers.into(),
                 MatchValue::ExceptIntegers(kwds) => {
@@ -2119,10 +2120,7 @@ impl From<segment::types::Match> for Match {
             segment::types::Match::Phrase(segment::types::MatchPhrase { phrase }) => {
                 MatchValue::Phrase(phrase)
             }
-            segment::types::Match::Fuzzy(segment::types::MatchFuzzy { fuzzy: _fuzzy }) => {
-                // TODO: need grpc declaration
-                todo!()
-            }
+            segment::types::Match::Fuzzy(fuzzy) => MatchValue::Fuzzy(fuzzy.into()),
             segment::types::Match::Any(any) => match any.any {
                 segment::types::AnyVariants::Strings(strings) => {
                     let strings = strings.into_iter().collect();
@@ -2149,6 +2147,101 @@ impl From<segment::types::Match> for Match {
         };
         Self {
             match_value: Some(match_value),
+        }
+    }
+}
+
+impl TryFrom<FuzzyParams> for segment::types::FuzzyParams {
+    type Error = Status;
+
+    fn try_from(value: FuzzyParams) -> Result<Self, Self::Error> {
+        let defaults = segment::types::FuzzyParams::default();
+
+        let max_edits = value.max_edits.unwrap_or(u32::from(defaults.max_edits));
+        if max_edits > u32::from(segment::types::FuzzyParams::MAX_EDITS_DISTANCE) {
+            return Err(Status::invalid_argument(format!(
+                "fuzzy distance must be <= {}, got {}",
+                segment::types::FuzzyParams::MAX_EDITS_DISTANCE,
+                max_edits,
+            )));
+        }
+
+        let prefix_length = value
+            .prefix_length
+            .unwrap_or(u32::from(defaults.prefix_length));
+        let prefix_length = u8::try_from(prefix_length).map_err(|_| {
+            Status::invalid_argument(format!(
+                "fuzzy prefix_length must be <= {}, got {}",
+                u8::MAX,
+                prefix_length,
+            ))
+        })?;
+
+        let max_expansions = value
+            .max_expansions
+            .unwrap_or(u32::from(defaults.max_expansions))
+            .clamp(
+                1,
+                u32::from(segment::types::FuzzyParams::MAX_EXPANSIONS_CAP),
+            );
+
+        Ok(segment::types::FuzzyParams {
+            max_edits: max_edits as u8,
+            prefix_length,
+            max_expansions: max_expansions as u8,
+        })
+    }
+}
+
+impl From<segment::types::FuzzyParams> for FuzzyParams {
+    fn from(value: segment::types::FuzzyParams) -> Self {
+        Self {
+            max_edits: Some(u32::from(value.max_edits)),
+            prefix_length: Some(u32::from(value.prefix_length)),
+            max_expansions: Some(u32::from(value.max_expansions)),
+        }
+    }
+}
+
+impl TryFrom<FuzzyMatch> for segment::types::MatchFuzzy {
+    type Error = Status;
+
+    fn try_from(value: FuzzyMatch) -> Result<Self, Self::Error> {
+        use crate::grpc::qdrant::fuzzy_match::Value;
+
+        let FuzzyMatch { params, value } = value;
+        let params = params.map(TryInto::try_into).transpose()?;
+        let value =
+            value.ok_or_else(|| Status::invalid_argument("Malformed FuzzyMatch condition"))?;
+
+        let fuzzy = match value {
+            Value::Text(text) => segment::types::Fuzzy::Text { text, params },
+            Value::Phrase(phrase) => segment::types::Fuzzy::Phrase { phrase, params },
+            Value::TextAny(text_any) => segment::types::Fuzzy::TextAny { text_any, params },
+        };
+
+        Ok(Self { fuzzy })
+    }
+}
+
+impl From<segment::types::MatchFuzzy> for FuzzyMatch {
+    fn from(value: segment::types::MatchFuzzy) -> Self {
+        use crate::grpc::qdrant::fuzzy_match::Value;
+
+        let segment::types::MatchFuzzy { fuzzy } = value;
+        match fuzzy {
+            segment::types::Fuzzy::Text { text, params } => Self {
+                value: Some(Value::Text(text)),
+                params: params.map(Into::into),
+            },
+            segment::types::Fuzzy::Phrase { phrase, params } => Self {
+                value: Some(Value::Phrase(phrase)),
+                params: params.map(Into::into),
+            },
+            segment::types::Fuzzy::TextAny { text_any, params } => Self {
+                value: Some(Value::TextAny(text_any)),
+                params: params.map(Into::into),
+            },
         }
     }
 }

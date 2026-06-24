@@ -24,6 +24,7 @@ impl FromPyObject<'_, '_> for PyMatch {
             Text(PyMatchText),
             TextAny(PyMatchTextAny),
             Phrase(PyMatchPhrase),
+            Fuzzy(PyMatchFuzzy),
             Any(PyMatchAny),
             Except(PyMatchExcept),
         }
@@ -45,6 +46,7 @@ impl FromPyObject<'_, '_> for PyMatch {
             Helper::Text(text) => Match::Text(MatchText::from(text)),
             Helper::TextAny(text_any) => Match::TextAny(MatchTextAny::from(text_any)),
             Helper::Phrase(phrase) => Match::Phrase(MatchPhrase::from(phrase)),
+            Helper::Fuzzy(fuzzy) => Match::Fuzzy(MatchFuzzy::from(fuzzy)),
             Helper::Any(any) => Match::Any(MatchAny::from(any)),
             Helper::Except(except) => Match::Except(MatchExcept::from(except)),
         };
@@ -64,11 +66,9 @@ impl<'py> IntoPyObject<'py> for PyMatch {
             Match::Text(text) => PyMatchText(text).into_bound_py_any(py),
             Match::TextAny(text_any) => PyMatchTextAny(text_any).into_bound_py_any(py),
             Match::Phrase(phrase) => PyMatchPhrase(phrase).into_bound_py_any(py),
+            Match::Fuzzy(fuzzy) => PyMatchFuzzy(fuzzy).into_bound_py_any(py),
             Match::Any(any) => PyMatchAny(any).into_bound_py_any(py),
             Match::Except(except) => PyMatchExcept(except).into_bound_py_any(py),
-            Match::Fuzzy(_) => Err(PyErr::new::<pyo3::exceptions::PyNotImplementedError, _>(
-                "Fuzzy match is not supported in Qdrant Edge",
-            )),
         }
     }
 }
@@ -80,9 +80,9 @@ impl Repr for PyMatch {
             Match::Text(text) => PyMatchText::wrap_ref(text).fmt(f),
             Match::TextAny(text_any) => PyMatchTextAny::wrap_ref(text_any).fmt(f),
             Match::Phrase(phrase) => PyMatchPhrase::wrap_ref(phrase).fmt(f),
+            Match::Fuzzy(fuzzy) => PyMatchFuzzy::wrap_ref(fuzzy).fmt(f),
             Match::Any(any) => PyMatchAny::wrap_ref(any).fmt(f),
             Match::Except(except) => PyMatchExcept::wrap_ref(except).fmt(f),
-            Match::Fuzzy(_) => write!(f, "MatchFuzzy(...)"),
         }
     }
 }
@@ -269,6 +269,167 @@ impl PyMatchPhrase {
     fn _getters(self) {
         // Every field should have a getter method
         let MatchPhrase { phrase: _ } = self.0;
+    }
+}
+
+#[pyclass(name = "FuzzyParams", from_py_object)]
+#[derive(Copy, Clone, Debug, Into, TransparentWrapper)]
+#[repr(transparent)]
+pub struct PyFuzzyParams(pub FuzzyParams);
+
+#[pyclass_repr]
+#[pymethods]
+impl PyFuzzyParams {
+    #[new]
+    #[pyo3(signature = (max_edits = None, prefix_length = None, max_expansions = None))]
+    pub fn new(
+        max_edits: Option<u8>,
+        prefix_length: Option<u8>,
+        max_expansions: Option<u8>,
+    ) -> PyResult<Self> {
+        let defaults = FuzzyParams::default();
+        let params = FuzzyParams {
+            max_edits: max_edits.unwrap_or(defaults.max_edits),
+            prefix_length: prefix_length.unwrap_or(defaults.prefix_length),
+            max_expansions: max_expansions.unwrap_or(defaults.max_expansions),
+        }
+        .validate()
+        .map_err(pyo3::exceptions::PyValueError::new_err)?;
+
+        Ok(Self(params))
+    }
+
+    #[getter]
+    pub fn max_edits(&self) -> u8 {
+        self.0.max_edits
+    }
+
+    #[getter]
+    pub fn prefix_length(&self) -> u8 {
+        self.0.prefix_length
+    }
+
+    #[getter]
+    pub fn max_expansions(&self) -> u8 {
+        self.0.max_expansions
+    }
+
+    pub fn __repr__(&self) -> String {
+        self.repr()
+    }
+}
+
+impl PyFuzzyParams {
+    fn _getters(self) {
+        // Every field should have a getter method
+        let FuzzyParams {
+            max_edits: _,
+            prefix_length: _,
+            max_expansions: _,
+        } = self.0;
+    }
+}
+
+#[pyclass(name = "MatchFuzzy", from_py_object)]
+#[derive(Clone, Debug, Into, TransparentWrapper)]
+#[repr(transparent)]
+pub struct PyMatchFuzzy(pub MatchFuzzy);
+
+#[pymethods]
+impl PyMatchFuzzy {
+    #[new]
+    #[pyo3(signature = (text = None, phrase = None, text_any = None, params = None))]
+    pub fn new(
+        text: Option<String>,
+        phrase: Option<String>,
+        text_any: Option<String>,
+        params: Option<PyFuzzyParams>,
+    ) -> PyResult<Self> {
+        let specified = usize::from(text.is_some())
+            + usize::from(phrase.is_some())
+            + usize::from(text_any.is_some());
+        if specified != 1 {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "Exactly one of text, phrase, or text_any must be specified",
+            ));
+        }
+
+        let params = params.map(|params| params.0);
+        let fuzzy = if let Some(text) = text {
+            Fuzzy::Text { text, params }
+        } else if let Some(phrase) = phrase {
+            Fuzzy::Phrase { phrase, params }
+        } else {
+            Fuzzy::TextAny {
+                text_any: text_any.expect("checked above"),
+                params,
+            }
+        };
+
+        Ok(Self(MatchFuzzy { fuzzy }))
+    }
+
+    #[getter]
+    pub fn text(&self) -> Option<&str> {
+        match &self.0.fuzzy {
+            Fuzzy::Text { text, .. } => Some(text),
+            Fuzzy::Phrase { .. } | Fuzzy::TextAny { .. } => None,
+        }
+    }
+
+    #[getter]
+    pub fn phrase(&self) -> Option<&str> {
+        match &self.0.fuzzy {
+            Fuzzy::Phrase { phrase, .. } => Some(phrase),
+            Fuzzy::Text { .. } | Fuzzy::TextAny { .. } => None,
+        }
+    }
+
+    #[getter]
+    pub fn text_any(&self) -> Option<&str> {
+        match &self.0.fuzzy {
+            Fuzzy::TextAny { text_any, .. } => Some(text_any),
+            Fuzzy::Text { .. } | Fuzzy::Phrase { .. } => None,
+        }
+    }
+
+    #[getter]
+    pub fn params(&self) -> Option<PyFuzzyParams> {
+        match &self.0.fuzzy {
+            Fuzzy::Text { params, .. }
+            | Fuzzy::Phrase { params, .. }
+            | Fuzzy::TextAny { params, .. } => params.map(PyFuzzyParams),
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        self.repr()
+    }
+}
+
+impl PyMatchFuzzy {
+    fn _getters(self) {
+        // Every field should have a getter method
+        let MatchFuzzy { fuzzy: _ } = self.0;
+    }
+}
+
+impl Repr for PyMatchFuzzy {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.0.fuzzy {
+            Fuzzy::Text { text, params } => f.class::<Self>(&[
+                ("text", text as &dyn Repr),
+                ("params", &params.map(PyFuzzyParams) as &dyn Repr),
+            ]),
+            Fuzzy::Phrase { phrase, params } => f.class::<Self>(&[
+                ("phrase", phrase as &dyn Repr),
+                ("params", &params.map(PyFuzzyParams) as &dyn Repr),
+            ]),
+            Fuzzy::TextAny { text_any, params } => f.class::<Self>(&[
+                ("text_any", text_any as &dyn Repr),
+                ("params", &params.map(PyFuzzyParams) as &dyn Repr),
+            ]),
+        }
     }
 }
 
