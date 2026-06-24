@@ -235,6 +235,9 @@ pub fn filter<'a, T: FullTextIndexRead>(
             index.parse_text_any_query(text_any, hw_counter)?
         }
         Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+        Match::Wildcard(match_wildcard) => {
+            index.parse_wildcard_query(&match_wildcard.wildcard, hw_counter)?
+        }
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
     };
 
@@ -262,6 +265,9 @@ pub fn estimate_cardinality<T: FullTextIndexRead>(
             index.parse_text_any_query(text_any, hw_counter)?
         }
         Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+        Match::Wildcard(match_wildcard) => {
+            index.parse_wildcard_query(&match_wildcard.wildcard, hw_counter)?
+        }
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
     };
 
@@ -318,6 +324,9 @@ pub fn condition_checker<'a, T: FullTextIndexRead>(
         }
         Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, &hw_counter)?,
         Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, &hw_counter),
+        Match::Wildcard(match_wildcard) => {
+            index.parse_wildcard_query(&match_wildcard.wildcard, &hw_counter)?
+        }
         Match::Value(MatchValue { value: _ })
         | Match::Any(MatchAny { any: _ })
         | Match::Except(MatchExcept { except: _ }) => return Ok(None),
@@ -341,7 +350,11 @@ pub fn special_check_condition<T: FullTextIndexRead>(
 ) -> OperationResult<Option<bool>> {
     Ok(match &condition.r#match {
         Some(
-            r#match @ (Match::Text(_) | Match::Phrase(_) | Match::TextAny(_) | Match::Fuzzy(_)),
+            r#match @ (Match::Text(_)
+            | Match::Phrase(_)
+            | Match::TextAny(_)
+            | Match::Fuzzy(_)
+            | Match::Wildcard(_)),
         ) => Some(index.check_payload_match(payload_value, r#match, hw_counter)?),
         Some(Match::Value(_) | Match::Any(_) | Match::Except(_)) | None => None,
     })

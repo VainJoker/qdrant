@@ -7,7 +7,7 @@ pub(super) use immutable_fuzzy_index::ImmutableFuzzyIndex;
 pub(super) use mutable_fuzzy_index::MutableFuzzyIndex;
 pub(super) use on_disk_fuzzy_index::OnDiskFuzzyIndex;
 
-use crate::types::FuzzyParams;
+use crate::types::{FuzzyParams, WildcardParams};
 
 pub(super) fn prefix_char_boundary(query: &str, prefix_len: usize) -> usize {
     query
@@ -40,4 +40,8 @@ impl FuzzyCandidate {
 /// fuzzy query filtering and matching using the same internal postings data.
 pub trait FuzzyIndex {
     fn search_levenshtein(&self, query: &str, params: &FuzzyParams) -> Vec<FuzzyCandidate>;
+
+    /// Search for terms matching a wildcard pattern.
+    /// Returns matching term strings (no scoring — wildcard is binary match).
+    fn search_wildcard(&self, pattern: &str, params: &WildcardParams) -> Vec<String>;
 }

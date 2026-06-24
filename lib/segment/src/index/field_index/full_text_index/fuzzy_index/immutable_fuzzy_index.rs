@@ -2,11 +2,13 @@ use fst::{IntoStreamer, Set, Streamer};
 use strsim::levenshtein;
 
 use super::{FuzzyIndex, prefix_chars};
-use crate::index::field_index::full_text_index::fuzzy_index::automaton::PrefixLevenshtein;
+use crate::index::field_index::full_text_index::fuzzy_index::automaton::{
+    PrefixLevenshtein, WildcardAutomaton,
+};
 use crate::index::field_index::full_text_index::fuzzy_index::{
     FuzzyCandidate, MutableFuzzyIndex, OnDiskFuzzyIndex,
 };
-use crate::types::FuzzyParams;
+use crate::types::{FuzzyParams, WildcardParams};
 
 pub struct ImmutableFuzzyIndex {
     index: Set<Vec<u8>>,
@@ -77,6 +79,31 @@ impl FuzzyIndex for ImmutableFuzzyIndex {
             results.extend(bucket);
         }
         results.truncate(max);
+        results
+    }
+
+    fn search_wildcard(&self, pattern: &str, params: &WildcardParams) -> Vec<String> {
+        let max = params.max_expansions as usize;
+        let automaton = WildcardAutomaton::new(pattern);
+        let prefix = automaton.literal_prefix();
+
+        let mut stream = if prefix.is_empty() {
+            self.index.search(&automaton).into_stream()
+        } else {
+            self.index.search(&automaton).ge(prefix).into_stream()
+        };
+
+        let mut results = Vec::new();
+        while let Some(term_bytes) = stream.next() {
+            let Ok(term) = std::str::from_utf8(term_bytes) else {
+                continue;
+            };
+            results.push(term.to_string());
+            if results.len() >= max {
+                break;
+            }
+        }
+
         results
     }
 }

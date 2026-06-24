@@ -13,7 +13,9 @@ use crate::common::operation_error::OperationResult;
 use crate::index::field_index::{CardinalityEstimation, PayloadBlockCondition, ValueIndexer};
 use crate::index::payload_config::StorageType;
 use crate::telemetry::PayloadIndexTelemetry;
-use crate::types::{FieldCondition, Fuzzy, FuzzyParams, Match, PayloadKeyType};
+use crate::types::{
+    FieldCondition, Fuzzy, FuzzyParams, Match, PayloadKeyType, Wildcard, WildcardParams,
+};
 
 /// Shared read surface for the writable [`FullTextIndex`] enum and the
 /// read-only `ReadOnlyFullTextIndex<S>` skeleton. Lets the
@@ -268,6 +270,50 @@ pub trait FullTextIndexRead {
         }
     }
 
+    fn parse_wildcard_query(
+        &self,
+        wildcard: &Wildcard,
+        hw_counter: &HardwareCounterCell,
+    ) -> OperationResult<Option<ParsedQuery>> {
+        let Some(fuzzy_index) = self.fuzzy_index() else {
+            return Ok(None);
+        };
+
+        let pattern = wildcard.pattern();
+        if !WildcardParams::validate_pattern(pattern) {
+            return Ok(None);
+        }
+
+        let tokenizer = self.tokenizer().tokens_processor();
+        let pattern = match tokenizer.lowercase {
+            true => Cow::Owned(pattern.to_lowercase()),
+            false => Cow::Borrowed(pattern),
+        };
+        let params = wildcard.params().validate();
+        let matched_terms = fuzzy_index.search_wildcard(pattern.as_ref(), &params);
+        if matched_terms.is_empty() {
+            return Ok(None);
+        }
+
+        let mut token_ids = Vec::with_capacity(matched_terms.len());
+        self.for_each_token_id(
+            matched_terms.iter().map(|term| ((), term.as_str())),
+            hw_counter,
+            |(), id| {
+                if let Some(id) = id {
+                    token_ids.push(id);
+                }
+            },
+        )?;
+
+        let tokenset: TokenSet = token_ids.into_iter().collect();
+        if tokenset.is_empty() {
+            return Ok(None);
+        }
+
+        Ok(Some(ParsedQuery::AnyTokens(tokenset)))
+    }
+
     /// Parse as provided [`TokenizerTextKind`] and return [`TokenSet`].
     /// Unseen tokens are ignored.
     fn parse_tokenset(
@@ -341,6 +387,9 @@ pub trait FullTextIndexRead {
                 self.parse_text_any_query(&match_text_any.text_any, hw_counter)?
             }
             Match::Fuzzy(match_fuzzy) => self.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+            Match::Wildcard(match_wildcard) => {
+                self.parse_wildcard_query(&match_wildcard.wildcard, hw_counter)?
+            }
             Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(false),
         };
 

@@ -315,6 +315,7 @@ fn condition_checker_impl<'a, T: MapIndexRead<IntPayloadType> + 'a>(
         | Match::Text(_)
         | Match::TextAny(_)
         | Match::Phrase(_)
-        | Match::Fuzzy(_) => None,
+        | Match::Fuzzy(_)
+        | Match::Wildcard(_) => None,
     }
 }

@@ -186,6 +186,7 @@ impl ValueChecker for Match {
             },
             // Fuzzy requires a full-text fuzzy index; raw payload matching cannot evaluate it.
             Match::Fuzzy(_) => false,
+            Match::Wildcard(_) => false,
             Match::Any(MatchAny { any }) => match (payload, any) {
                 (Value::String(stored), AnyVariants::Strings(list)) => {
                     if list.len() < INDEXSET_ITER_THRESHOLD {
