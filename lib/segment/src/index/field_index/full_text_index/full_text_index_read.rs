@@ -139,8 +139,8 @@ pub trait FullTextIndexRead {
     /// This keeps approximate matching from becoming too broad/noisy for short
     /// terms, where one edit can change most of the token.
     ///
-    /// Returns [`None`] if token-id resolution fails, if `require_all` is set
-    /// and any query token has no match, or if no token groups remain.
+    /// Returns [`None`] if `require_all` is set and any query token has no match,
+    /// or if no token groups remain.
     fn fuzzy_token_sets(
         &self,
         fuzzy_index: &dyn FuzzyIndex,
@@ -149,14 +149,18 @@ pub trait FullTextIndexRead {
         text: &str,
         params: &FuzzyParams,
         require_all: bool,
-    ) -> Option<Vec<TokenSet>> {
+    ) -> OperationResult<Option<Vec<TokenSet>>> {
         let min_len = self
             .tokenizer()
             .tokens_processor()
             .min_token_len
             .unwrap_or(3);
-        let mut result: Result<Vec<TokenSet>, ()> = Ok(Vec::new());
+        let mut result: OperationResult<Vec<TokenSet>> = Ok(Vec::new());
+        let mut missing_required_token = false;
         self.tokenizer().tokenize(kind, text, |token| {
+            if missing_required_token {
+                return;
+            }
             let Ok(sets) = result.as_mut() else {
                 return;
             };
@@ -184,18 +188,21 @@ pub trait FullTextIndexRead {
                 )
             };
             match ok {
-                Err(_) => result = Err(()),
+                Err(err) => result = Err(err),
                 Ok(_) => {
                     let ts: TokenSet = token_ids.into_iter().collect();
                     if !ts.is_empty() {
                         sets.push(ts);
                     } else if require_all {
-                        result = Err(());
+                        missing_required_token = true;
                     }
                 }
             }
         });
-        result.ok().filter(|sets| !sets.is_empty())
+        if missing_required_token {
+            return Ok(None);
+        }
+        result.map(|sets| (!sets.is_empty()).then_some(sets))
     }
 
     /// Convert a user-facing fuzzy match clause into the internal parsed query.
@@ -207,63 +214,70 @@ pub trait FullTextIndexRead {
         &self,
         fuzzy: &Fuzzy,
         hw_counter: &HardwareCounterCell,
-    ) -> Option<ParsedQuery> {
-        let fuzzy_index = self.fuzzy_index()?;
+    ) -> OperationResult<Option<ParsedQuery>> {
+        let Some(fuzzy_index) = self.fuzzy_index() else {
+            return Ok(None);
+        };
         let default_params = FuzzyParams::default();
 
         match fuzzy {
             Fuzzy::Text { text, params } => {
                 let params = params.as_ref().unwrap_or(&default_params);
                 if params.max_edits == 0 {
-                    return self.parse_text_query(text, hw_counter).ok().flatten();
+                    return self.parse_text_query(text, hw_counter);
                 }
-                let mut groups = self.fuzzy_token_sets(
+                let Some(mut groups) = self.fuzzy_token_sets(
                     fuzzy_index,
                     hw_counter,
                     TokenizerTextKind::Query,
                     text,
                     params,
                     true,
-                )?;
+                )?
+                else {
+                    return Ok(None);
+                };
                 groups.sort_unstable_by_key(TokenSet::len);
-                Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(groups)))
+                Ok(Some(ParsedQuery::FuzzyAllTokens(FuzzyDocument::new(
+                    groups,
+                ))))
             }
             Fuzzy::TextAny { text_any, params } => {
                 let params = params.as_ref().unwrap_or(&default_params);
                 if params.max_edits == 0 {
-                    return self
-                        .parse_text_any_query(text_any, hw_counter)
-                        .ok()
-                        .flatten();
+                    return self.parse_text_any_query(text_any, hw_counter);
                 }
-                let tokens = self
-                    .fuzzy_token_sets(
-                        fuzzy_index,
-                        hw_counter,
-                        TokenizerTextKind::Query,
-                        text_any,
-                        params,
-                        false,
-                    )?
-                    .into_iter()
-                    .flat_map(TokenSet::inner)
-                    .collect();
-                Some(ParsedQuery::FuzzyAnyTokens(tokens))
+                let Some(groups) = self.fuzzy_token_sets(
+                    fuzzy_index,
+                    hw_counter,
+                    TokenizerTextKind::Query,
+                    text_any,
+                    params,
+                    false,
+                )?
+                else {
+                    return Ok(None);
+                };
+                let tokens = groups.into_iter().flat_map(TokenSet::inner).collect();
+                Ok(Some(ParsedQuery::FuzzyAnyTokens(tokens)))
             }
             Fuzzy::Phrase { phrase, params } => {
                 let params = params.as_ref().unwrap_or(&default_params);
                 if params.max_edits == 0 {
-                    return self.parse_phrase_query(phrase, hw_counter).ok().flatten();
+                    return self.parse_phrase_query(phrase, hw_counter);
                 }
-                let groups = self.fuzzy_token_sets(
+                let Some(groups) = self.fuzzy_token_sets(
                     fuzzy_index,
                     hw_counter,
                     TokenizerTextKind::Document,
                     phrase,
                     params,
                     true,
-                )?;
-                Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(groups)))
+                )?
+                else {
+                    return Ok(None);
+                };
+                Ok(Some(ParsedQuery::FuzzyPhrase(FuzzyDocument::new(groups))))
             }
         }
     }
@@ -340,7 +354,7 @@ pub trait FullTextIndexRead {
             Match::TextAny(match_text_any) => {
                 self.parse_text_any_query(&match_text_any.text_any, hw_counter)?
             }
-            Match::Fuzzy(match_fuzzy) => self.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+            Match::Fuzzy(match_fuzzy) => self.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter)?,
             Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(false),
         };
 

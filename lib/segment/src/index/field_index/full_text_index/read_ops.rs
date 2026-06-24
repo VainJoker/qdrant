@@ -234,7 +234,7 @@ pub fn filter<'a, T: FullTextIndexRead>(
         Match::TextAny(MatchTextAny { text_any }) => {
             index.parse_text_any_query(text_any, hw_counter)?
         }
-        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter)?,
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
     };
 
@@ -261,7 +261,7 @@ pub fn estimate_cardinality<T: FullTextIndexRead>(
         Match::TextAny(MatchTextAny { text_any }) => {
             index.parse_text_any_query(text_any, hw_counter)?
         }
-        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter),
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, hw_counter)?,
         Match::Value(_) | Match::Any(_) | Match::Except(_) => return Ok(None),
     };
 
@@ -317,7 +317,7 @@ pub fn condition_checker<'a, T: FullTextIndexRead>(
             index.parse_text_any_query(text_any, &hw_counter)?
         }
         Match::Phrase(MatchPhrase { phrase }) => index.parse_phrase_query(phrase, &hw_counter)?,
-        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, &hw_counter),
+        Match::Fuzzy(match_fuzzy) => index.parse_fuzzy_query(&match_fuzzy.fuzzy, &hw_counter)?,
         Match::Value(MatchValue { value: _ })
         | Match::Any(MatchAny { any: _ })
         | Match::Except(MatchExcept { except: _ }) => return Ok(None),

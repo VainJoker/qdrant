@@ -402,6 +402,7 @@ fn test_fuzzy_token_sets_require_all_and_any_semantics() {
             &params,
             false,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(any_sets.len(), 1);
     assert_eq!(any_sets[0].len(), 1);
@@ -416,6 +417,7 @@ fn test_fuzzy_token_sets_require_all_and_any_semantics() {
                 &params,
                 true,
             )
+            .unwrap()
             .is_none()
     );
 }
@@ -446,6 +448,7 @@ fn test_fuzzy_token_sets_resolve_short_tokens_exactly() {
                 &params,
                 true,
             )
+            .unwrap()
             .is_none(),
         "tokens with length <= min_token_len must not fuzzy-expand"
     );
@@ -459,6 +462,7 @@ fn test_fuzzy_token_sets_resolve_short_tokens_exactly() {
             &params,
             true,
         )
+        .unwrap()
         .unwrap();
     assert_eq!(exact_sets.len(), 1);
     assert_eq!(exact_sets[0].len(), 1);
@@ -494,6 +498,7 @@ fn test_parse_fuzzy_query_variants() {
             },
             &hw_counter,
         )
+        .unwrap()
         .unwrap();
     let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
     results.sort_unstable();
@@ -507,6 +512,7 @@ fn test_parse_fuzzy_query_variants() {
             },
             &hw_counter,
         )
+        .unwrap()
         .unwrap();
     let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
     results.sort_unstable();
@@ -520,6 +526,7 @@ fn test_parse_fuzzy_query_variants() {
             },
             &hw_counter,
         )
+        .unwrap()
         .unwrap();
     let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
     results.sort_unstable();
