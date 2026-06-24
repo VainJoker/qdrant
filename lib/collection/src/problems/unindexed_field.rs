@@ -612,15 +612,22 @@ fn schema_capabilities(value: &PayloadFieldSchema) -> HashSet<FieldIndexType> {
                 phrase_matching,
                 fuzzy_matching,
                 ..
-            }) => match (
-                phrase_matching.unwrap_or_default(),
-                fuzzy_matching.unwrap_or_default(),
-            ) {
-                (false, false) => index_types.insert(FieldIndexType::Text),
-                (false, true) => index_types.insert(FieldIndexType::TextFuzzy),
-                (true, false) => index_types.insert(FieldIndexType::TextPhrase),
-                (true, true) => index_types.insert(FieldIndexType::TextPhraseFuzzy),
-            },
+            }) => {
+                let phrase_matching = phrase_matching.unwrap_or_default();
+                let fuzzy_matching = fuzzy_matching.unwrap_or_default();
+
+                index_types.insert(FieldIndexType::Text);
+                if phrase_matching {
+                    index_types.insert(FieldIndexType::TextPhrase);
+                }
+                if fuzzy_matching {
+                    index_types.insert(FieldIndexType::TextFuzzy);
+                }
+                if phrase_matching && fuzzy_matching {
+                    index_types.insert(FieldIndexType::TextPhraseFuzzy);
+                }
+                true
+            }
             PayloadSchemaParams::Datetime(_) => index_types.insert(FieldIndexType::DatetimeRange),
         },
     };
@@ -705,6 +712,23 @@ mod tests {
         assert!(!index_types.contains(&FieldIndexType::TextPhrase));
         assert!(!index_types.contains(&FieldIndexType::TextFuzzy));
         assert!(!index_types.contains(&FieldIndexType::TextPhraseFuzzy));
+    }
+
+    #[test]
+    fn text_phrase_fuzzy_index_is_a_capability_superset() {
+        let params = PayloadSchemaParams::Text(TextIndexParams {
+            r#type: TextIndexType::Text,
+            phrase_matching: Some(true),
+            fuzzy_matching: Some(true),
+            ..Default::default()
+        });
+        let schema = PayloadFieldSchema::FieldParams(params);
+        let index_types = schema_capabilities(&schema);
+
+        assert!(index_types.contains(&FieldIndexType::Text));
+        assert!(index_types.contains(&FieldIndexType::TextPhrase));
+        assert!(index_types.contains(&FieldIndexType::TextFuzzy));
+        assert!(index_types.contains(&FieldIndexType::TextPhraseFuzzy));
     }
 
     #[test]
