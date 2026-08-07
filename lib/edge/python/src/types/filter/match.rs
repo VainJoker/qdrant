@@ -25,6 +25,7 @@ impl FromPyObject<'_, '_> for PyMatch {
             TextAny(PyMatchTextAny),
             Phrase(PyMatchPhrase),
             Fuzzy(PyMatchFuzzy),
+            Wildcard(PyMatchWildcard),
             Any(PyMatchAny),
             Except(PyMatchExcept),
         }
@@ -38,6 +39,7 @@ impl FromPyObject<'_, '_> for PyMatch {
                 Match::Any(_) => {}
                 Match::Except(_) => {}
                 Match::Fuzzy(_) => {}
+                Match::Wildcard(_) => {}
             }
         }
 
@@ -47,6 +49,7 @@ impl FromPyObject<'_, '_> for PyMatch {
             Helper::TextAny(text_any) => Match::TextAny(MatchTextAny::from(text_any)),
             Helper::Phrase(phrase) => Match::Phrase(MatchPhrase::from(phrase)),
             Helper::Fuzzy(fuzzy) => Match::Fuzzy(MatchFuzzy::from(fuzzy)),
+            Helper::Wildcard(wildcard) => Match::Wildcard(MatchWildcard::from(wildcard)),
             Helper::Any(any) => Match::Any(MatchAny::from(any)),
             Helper::Except(except) => Match::Except(MatchExcept::from(except)),
         };
@@ -67,6 +70,7 @@ impl<'py> IntoPyObject<'py> for PyMatch {
             Match::TextAny(text_any) => PyMatchTextAny(text_any).into_bound_py_any(py),
             Match::Phrase(phrase) => PyMatchPhrase(phrase).into_bound_py_any(py),
             Match::Fuzzy(fuzzy) => PyMatchFuzzy(fuzzy).into_bound_py_any(py),
+            Match::Wildcard(wildcard) => PyMatchWildcard(wildcard).into_bound_py_any(py),
             Match::Any(any) => PyMatchAny(any).into_bound_py_any(py),
             Match::Except(except) => PyMatchExcept(except).into_bound_py_any(py),
         }
@@ -81,6 +85,7 @@ impl Repr for PyMatch {
             Match::TextAny(text_any) => PyMatchTextAny::wrap_ref(text_any).fmt(f),
             Match::Phrase(phrase) => PyMatchPhrase::wrap_ref(phrase).fmt(f),
             Match::Fuzzy(fuzzy) => PyMatchFuzzy::wrap_ref(fuzzy).fmt(f),
+            Match::Wildcard(wildcard) => PyMatchWildcard::wrap_ref(wildcard).fmt(f),
             Match::Any(any) => PyMatchAny::wrap_ref(any).fmt(f),
             Match::Except(except) => PyMatchExcept::wrap_ref(except).fmt(f),
         }
@@ -428,6 +433,111 @@ impl Repr for PyMatchFuzzy {
             Fuzzy::TextAny { text_any, params } => f.class::<Self>(&[
                 ("text_any", text_any as &dyn Repr),
                 ("params", &params.map(PyFuzzyParams) as &dyn Repr),
+            ]),
+        }
+    }
+}
+
+#[pyclass(name = "WildcardParams", from_py_object)]
+#[derive(Copy, Clone, Debug, Into, TransparentWrapper)]
+#[repr(transparent)]
+pub struct PyWildcardParams(pub WildcardParams);
+
+#[pyclass_repr]
+#[pymethods]
+impl PyWildcardParams {
+    #[new]
+    #[pyo3(signature = (max_expansions = None))]
+    pub fn new(max_expansions: Option<u16>) -> Self {
+        let defaults = WildcardParams::default();
+        Self(
+            WildcardParams {
+                max_expansions: max_expansions.unwrap_or(defaults.max_expansions),
+            }
+            .validate(),
+        )
+    }
+
+    #[getter]
+    pub fn max_expansions(&self) -> u16 {
+        self.0.max_expansions
+    }
+
+    pub fn __repr__(&self) -> String {
+        self.repr()
+    }
+}
+
+impl PyWildcardParams {
+    fn _getters(self) {
+        // Every field should have a getter method
+        let WildcardParams { max_expansions: _ } = self.0;
+    }
+}
+
+#[pyclass(name = "MatchWildcard", from_py_object)]
+#[derive(Clone, Debug, Into, TransparentWrapper)]
+#[repr(transparent)]
+pub struct PyMatchWildcard(pub MatchWildcard);
+
+#[pymethods]
+impl PyMatchWildcard {
+    #[new]
+    #[pyo3(signature = (pattern, params = None))]
+    pub fn new(pattern: String, params: Option<PyWildcardParams>) -> PyResult<Self> {
+        if !WildcardParams::validate_pattern(&pattern) {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Wildcard pattern must be non-empty and at most {} characters",
+                WildcardParams::MAX_PATTERN_LENGTH,
+            )));
+        }
+
+        let wildcard = match params.map(|params| params.0) {
+            Some(params) => Wildcard::Pattern {
+                pattern,
+                params: Some(params),
+            },
+            None => Wildcard::Simple(pattern),
+        };
+
+        Ok(Self(MatchWildcard { wildcard }))
+    }
+
+    #[getter]
+    pub fn pattern(&self) -> &str {
+        self.0.wildcard.pattern()
+    }
+
+    #[getter]
+    pub fn params(&self) -> Option<PyWildcardParams> {
+        match &self.0.wildcard {
+            Wildcard::Simple(_) => None,
+            Wildcard::Pattern { params, .. } => params.map(PyWildcardParams),
+        }
+    }
+
+    pub fn __repr__(&self) -> String {
+        self.repr()
+    }
+}
+
+impl PyMatchWildcard {
+    fn _getters(self) {
+        // Every field should have a getter method
+        let MatchWildcard { wildcard: _ } = self.0;
+    }
+}
+
+impl Repr for PyMatchWildcard {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.0.wildcard {
+            Wildcard::Simple(pattern) => f.class::<Self>(&[
+                ("pattern", pattern as &dyn Repr),
+                ("params", &Option::<PyWildcardParams>::None as &dyn Repr),
+            ]),
+            Wildcard::Pattern { pattern, params } => f.class::<Self>(&[
+                ("pattern", pattern as &dyn Repr),
+                ("params", &params.map(PyWildcardParams) as &dyn Repr),
             ]),
         }
     }

@@ -249,6 +249,7 @@ fn infer_index_from_field_condition(field_condition: &FieldCondition) -> Vec<Fie
                 }
                 segment::types::Fuzzy::Phrase { .. } => vec![FieldIndexType::TextPhraseFuzzy],
             },
+            Match::Wildcard(_) => vec![FieldIndexType::TextFuzzy],
         })
     }
     if let Some(range_interface) = range {
@@ -745,5 +746,18 @@ mod tests {
 
         let inferred = infer_index_from_field_condition(&field_condition);
         assert_eq!(inferred, vec![FieldIndexType::TextPhraseFuzzy]);
+    }
+
+    #[test]
+    fn wildcard_requires_fuzzy_text_index() {
+        let field_condition = FieldCondition::new_match(
+            JsonPath::new("text"),
+            Match::Wildcard(segment::types::MatchWildcard {
+                wildcard: segment::types::Wildcard::Simple("he*o".to_string()),
+            }),
+        );
+
+        let inferred = infer_index_from_field_condition(&field_condition);
+        assert_eq!(inferred, vec![FieldIndexType::TextFuzzy]);
     }
 }

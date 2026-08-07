@@ -9480,6 +9480,9 @@
             "$ref": "#/components/schemas/MatchFuzzy"
           },
           {
+            "$ref": "#/components/schemas/MatchWildcard"
+          },
+          {
             "$ref": "#/components/schemas/MatchAny"
           },
           {
@@ -9658,6 +9661,61 @@
             "format": "uint8",
             "maximum": 30,
             "minimum": 1
+          }
+        }
+      },
+      "MatchWildcard": {
+        "description": "Match filter request",
+        "type": "object",
+        "required": [
+          "wildcard"
+        ],
+        "properties": {
+          "wildcard": {
+            "$ref": "#/components/schemas/Wildcard"
+          }
+        }
+      },
+      "Wildcard": {
+        "description": "Wildcard match condition: supports `*` (any sequence) and `?` (one Unicode code point).",
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "required": [
+              "pattern"
+            ],
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "params": {
+                "default": null,
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/WildcardParams"
+                  },
+                  {
+                    "nullable": true
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "WildcardParams": {
+        "description": "Parameters for wildcard pattern matching.",
+        "type": "object",
+        "properties": {
+          "max_expansions": {
+            "description": "Max number of matching terms to expand. Default: 1024. Supports the full `u16` range.",
+            "default": 1024,
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0
           }
         }
       },

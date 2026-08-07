@@ -12,7 +12,7 @@ use crate::index::field_index::full_text_index::full_text_index_read::FullTextIn
 use crate::index::field_index::{
     FieldIndex, FieldIndexBuilderTrait as _, PayloadFieldIndexRead, ValueIndexer,
 };
-use crate::types::{Fuzzy, FuzzyParams};
+use crate::types::{Fuzzy, FuzzyParams, Wildcard, WildcardParams};
 
 fn fuzzy_test_params() -> TextIndexParams {
     TextIndexParams {
@@ -524,6 +524,54 @@ fn test_parse_fuzzy_query_variants() {
     let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
     results.sort_unstable();
     assert_eq!(results, vec![0, 3]);
+}
+
+#[test]
+fn test_parse_wildcard_query() {
+    let hw_counter = HardwareCounterCell::new();
+    let temp_dir = Builder::new().prefix("test_dir").tempdir().unwrap();
+    let mut index =
+        FullTextIndex::new_gridstore(temp_dir.path().to_path_buf(), fuzzy_test_params(), true)
+            .unwrap()
+            .unwrap();
+
+    for (point_id, text) in [
+        (0, "quick brown fox"),
+        (1, "quick blue fox"),
+        (2, "slow brown dog"),
+        (3, "quick brown dog"),
+    ] {
+        index
+            .add_many(point_id, vec![text.to_string()], &hw_counter)
+            .unwrap();
+    }
+
+    let query = index
+        .parse_wildcard_query(&Wildcard::Simple("QU*CK".to_string()), &hw_counter)
+        .unwrap()
+        .unwrap();
+    let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
+    results.sort_unstable();
+    assert_eq!(results, vec![0, 1, 3]);
+
+    let query = index
+        .parse_wildcard_query(
+            &Wildcard::Pattern {
+                pattern: "br?wn".to_string(),
+                params: Some(WildcardParams { max_expansions: 10 }),
+            },
+            &hw_counter,
+        )
+        .unwrap()
+        .unwrap();
+    let mut results: Vec<_> = index.filter_query(query, &hw_counter).unwrap().collect();
+    results.sort_unstable();
+    assert_eq!(results, vec![0, 2, 3]);
+
+    let invalid = index
+        .parse_wildcard_query(&Wildcard::Simple(String::new()), &hw_counter)
+        .unwrap();
+    assert!(invalid.is_none());
 }
 
 #[test]

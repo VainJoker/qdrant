@@ -35,6 +35,12 @@ impl Repr for u8 {
     }
 }
 
+impl Repr for u16 {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
 impl Repr for u32 {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "{self}")

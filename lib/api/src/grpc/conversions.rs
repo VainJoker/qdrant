@@ -2089,6 +2089,9 @@ impl TryFrom<Match> for segment::types::Match {
                 MatchValue::Text(text) => segment::types::Match::Text(text.into()),
                 MatchValue::Phrase(phrase) => segment::types::Match::Phrase(phrase.into()),
                 MatchValue::Fuzzy(fuzzy) => segment::types::Match::Fuzzy(fuzzy.try_into()?),
+                MatchValue::Wildcard(wildcard) => {
+                    segment::types::Match::Wildcard(wildcard.try_into()?)
+                }
                 MatchValue::Keywords(kwds) => kwds.strings.into(),
                 MatchValue::Integers(ints) => ints.integers.into(),
                 MatchValue::ExceptIntegers(kwds) => {
@@ -2121,6 +2124,7 @@ impl From<segment::types::Match> for Match {
                 MatchValue::Phrase(phrase)
             }
             segment::types::Match::Fuzzy(fuzzy) => MatchValue::Fuzzy(fuzzy.into()),
+            segment::types::Match::Wildcard(wildcard) => MatchValue::Wildcard(wildcard.into()),
             segment::types::Match::Any(any) => match any.any {
                 segment::types::AnyVariants::Strings(strings) => {
                     let strings = strings.into_iter().collect();
@@ -2241,6 +2245,48 @@ impl From<segment::types::MatchFuzzy> for FuzzyMatch {
             segment::types::Fuzzy::TextAny { text_any, params } => Self {
                 value: Some(Value::TextAny(text_any)),
                 params: params.map(Into::into),
+            },
+        }
+    }
+}
+
+impl TryFrom<grpc::WildcardMatch> for segment::types::MatchWildcard {
+    type Error = Status;
+
+    fn try_from(wildcard: grpc::WildcardMatch) -> Result<Self, Self::Error> {
+        let default_max_expansions =
+            u32::from(segment::types::WildcardParams::default().max_expansions);
+        let params = wildcard.params.map(|p| segment::types::WildcardParams {
+            max_expansions: p
+                .max_expansions
+                .unwrap_or(default_max_expansions)
+                .min(u32::from(u16::MAX)) as u16,
+        });
+        Ok(segment::types::MatchWildcard {
+            wildcard: segment::types::Wildcard::Pattern {
+                pattern: wildcard.pattern,
+                params,
+            },
+        })
+    }
+}
+
+impl From<segment::types::MatchWildcard> for grpc::WildcardMatch {
+    fn from(wildcard: segment::types::MatchWildcard) -> Self {
+        match wildcard.wildcard {
+            segment::types::Wildcard::Simple(pattern) => grpc::WildcardMatch {
+                pattern,
+                params: Some(grpc::WildcardParams {
+                    max_expansions: Some(u32::from(
+                        segment::types::WildcardParams::default().max_expansions,
+                    )),
+                }),
+            },
+            segment::types::Wildcard::Pattern { pattern, params } => grpc::WildcardMatch {
+                pattern,
+                params: Some(grpc::WildcardParams {
+                    max_expansions: Some(u32::from(params.unwrap_or_default().max_expansions)),
+                }),
             },
         }
     }

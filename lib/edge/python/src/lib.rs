@@ -72,7 +72,8 @@ mod qdrant_edge {
         PyFieldCondition, PyFilter, PyFuzzyParams, PyGeoBoundingBox, PyGeoPoint, PyGeoPolygon,
         PyGeoRadius, PyHasIdCondition, PyHasVectorCondition, PyIsEmptyCondition, PyIsNullCondition,
         PyMatchAny, PyMatchExcept, PyMatchFuzzy, PyMatchPhrase, PyMatchText, PyMatchTextAny,
-        PyMatchValue, PyMinShould, PyNestedCondition, PyRangeDateTime, PyRangeFloat, PyValuesCount,
+        PyMatchValue, PyMatchWildcard, PyMinShould, PyNestedCondition, PyRangeDateTime,
+        PyRangeFloat, PyValuesCount, PyWildcardParams,
     };
     #[pymodule_export]
     use super::types::formula::{PyDecayKind, PyExpressionInterface, PyFormula};
